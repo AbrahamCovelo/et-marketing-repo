@@ -1,0 +1,114 @@
+﻿Estrategia Integral y Técnica de Localización de Contenido Multisitio (V2)
+
+
+1. Visión General, Objetivos y Alcance del Proyecto
+El objetivo principal de esta estrategia ampliada es establecer un canal de producción de contenido escalable, automatizado y altamente localizado utilizando la API de Google Gemini. El flujo de trabajo toma como "fuente de la verdad" el contenido validado de movingtospain.com y lo distribuye adaptado culturalmente a nichos migratorios específicos, maximizando el alcance SEO sin caer en penalizaciones por contenido duplicado.
+Los sitios destino y sus respectivos idiomas son:
+* Sitio Destino 1: canadiansinspain.com (Inglés Canadiense y Francés Canadiense). Enfocado en jubilados ("snowbirds"), profesionales y familias, requiriendo adaptación a políticas fiscales canadienses (RRSP) y sistemas de salud provinciales.
+* Sitio Destino 2: colombianosespana.com (Español Colombiano). Orientado a visas de trabajo, estudio, nómadas digitales y la Ley de Memoria Democrática, con adaptación a la burocracia local (Consulado en Bogotá, apostillas, equivalencia de títulos).
+
+
+
+
+2. Arquitectura de Distribución: El Patrón "Scrape Once, Fan Out"
+Para asegurar la estabilidad del proyecto, el proceso técnico consta de tres etapas aisladas. Esto evita la sobrecarga del servidor de origen y estandariza el texto base.
+1. Extracción y Staging (ETL): Un script en Python rastrea movingtospain.com una sola vez. Limpia el HTML (eliminando encabezados, pies de página y anuncios) y guarda el texto puro en una base de datos local SQLite (`source_articles`).
+2. Generación y Localización Multimodal: Un motor de Python lee la base de datos y envía el texto a Gemini 2.5 Flash junto con perfiles (prompts) hiper-específicos para cada cultura e idioma.
+3. Despliegue CMS (WordPress REST API): Los resultados formateados en HTML se inyectan automáticamente como "Borradores" (Drafts) en los respectivos sitios web de WordPress.
+
+
+
+
+3. Configuración de Prompts de Python para Gemini (Templates)
+El núcleo de la transcreación reside en las instrucciones del sistema (System Instructions) enviadas a Gemini. A continuación se detallan los prompts exactos en Python utilizados para cada variante.
+3.1. Variante: Inglés Canadiense (canadiansinspain.com)
+Este prompt ajusta la ortografía al inglés de Canadá (ej. "colour", "centre"), convierte valores a dólares canadienses (CAD) y menciona contextos relevantes de Norteamérica.
+canadian_english_prompt = f"""
+Target Audience & Culture: Canadian expats moving to Spain (Locale: en-CA)
+Base Article:
+'''
+{source_text}
+'''
+
+Role: You are an expert Canadian immigration and lifestyle copywriter.
+Task: Rewrite the Base Article into an original, engaging blog post specifically tailored for Canadians.
+
+Strict Guidelines:
+1. Cultural Localization: Use Canadian English spelling (e.g., favour, centre). Convert general financial concepts to Canadian equivalents (mentioning CAD currency, RRSPs, or provincial health care like OHIP/RAMQ where conceptually appropriate as a comparison). Include subtle nods to Canadian seasons (e.g., escaping the winter/snowbirds) if applicable.
+2. Neutralize Credentials: STRIP OUT any mentions of "reviewed by Dr. X", "certified legal expert", or formal review panels from the original text. Present the information as general, helpful editorial guidance.
+3. Formatting: Return clean HTML suitable for WordPress. Use <h2> for subheadings, <p> for paragraphs, and <ul><li> for lists. Do not use Markdown.
+4. Internal Links: Insert the exact text [CTA_IMMIGRATION_EN] and [CTA_TAXES_EN] naturally at the end of relevant sections so our system can replace them with internal links.
+"""
+
+3.2. Variante: Francés Canadiense (canadiansinspain.com)
+El reto aquí es evitar el francés de Francia (metropolitano) y utilizar el vocabulario, las expresiones y el tono propio de Quebec y la francofonía canadiense.
+canadian_french_prompt = f"""
+Public Cible et Culture : Expatriés canadiens et québécois s'installant en Espagne (Locale: fr-CA)
+Article de Base :
+'''
+{source_text}
+'''
+
+Rôle : Vous êtes un rédacteur expert en expatriation et style de vie, originaire du Québec.
+Tâche : Réécrivez l'article de base pour en faire un article de blog original et attrayant, spécifiquement adapté aux Canadiens francophones.
+
+Directives Strictes :
+1. Localisation Culturelle et Linguistique : Utilisez le français canadien/québécois. Évitez les expressions strictement de France (ex: utilisez "fin de semaine" au lieu de "week-end", "courriel" au lieu de "mail"). Faites référence au dollar canadien (CAD) et comparez les démarches avec le système québécois ou canadien quand c'est pertinent.
+2. Neutralisation des Références : SUPPRIMEZ TOUTE mention du type "révisé par le Dr X", "avocat certifié" ou tout panel d'examen formel. Présentez l'information comme un guide éditorial pratique et général.
+3. Formatage : Retournez un code HTML propre pour WordPress (<h2>, <p>, <ul>). N'utilisez pas de Markdown.
+4. Liens Internes : Insérez le texte exact [CTA_IMMIGRATION_FR] et [CTA_TAXES_FR] de manière naturelle à la fin des sections pertinentes.
+"""
+
+3.3. Variante: Español Colombiano (colombianosespana.com)
+Para Colombia, el enfoque se centra en el idioma local (sin caer en el "tuteo" excesivo ni en jergas extremas), trámites consulares específicos (apostilla, BLS International en Bogotá) y la conversión mental a pesos colombianos (COP).
+colombian_spanish_prompt = f"""
+Público Objetivo y Cultura: Colombianos que planean emigrar o ya viven en España (Locale: es-CO)
+Artículo Base:
+'''
+{source_text}
+'''
+
+Rol: Eres un redactor experto en migración y estilo de vida, originario de Colombia.
+Tarea: Reescribe el artículo base para crear un post original, empático y altamente útil para el público colombiano.
+
+Directrices Estrictas:
+1. Localización Cultural: Usa un español neutro-colombiano, profesional pero cercano (uso de 'usted' o 'tú' de manera consistente y respetuosa). Adapta los ejemplos financieros mencionando pesos colombianos (COP) como referencia. Si el tema es burocrático, menciona sutilmente la necesidad de apostillar documentos colombianos o trámites en el Consulado de España en Bogotá.
+2. Eliminación de Credenciales: ELIMINA CUALQUIER etiqueta de "revisado por", "abogado certificado" o paneles médicos/legales que vengan del texto original. Convierte estas afirmaciones en consejos prácticos generales.
+3. Formato: Devuelve únicamente HTML limpio compatible con WordPress (<h2>, <p>, <ul>). No uses formato Markdown.
+4. Enlaces Internos (CTAs): Inserta de forma muy natural las etiquetas [CTA_INMIGRACION_ES] y [CTA_IMPUESTOS_ES] en párrafos que hablen de visados o finanzas respectivamente.
+"""
+
+
+
+
+
+4. Procesamiento en Python: Inyección de CTAs
+Una vez que Gemini devuelve el código HTML con las etiquetas como `[CTA_IMMIGRATION_EN]`, el script de Python las reemplazará antes de enviarlas a WordPress.
+# Ejemplo de reemplazo en Python post-generación:
+cta_links = {
+   "[CTA_IMMIGRATION_EN]": "<div class='cta-box'><a href='https://canadiansinspain.com/immigration-services'>Need help with your Spanish visa? Book a consultation with our immigration experts today.</a></div>",
+   "[CTA_TAXES_EN]": "<div class='cta-box'><a href='https://canadiansinspain.com/tax-services'>Optimize your Canadian-Spanish tax situation. Speak to our accountants.</a></div>"
+}
+
+for tag, html_link in cta_links.items():
+   generated_html = generated_html.replace(tag, html_link)
+
+
+
+
+
+5. Estrategia YMYL y E-E-A-T: Revisión Manual y Carga a WordPress
+Debido a que Google clasifica los temas de visas y finanzas como YMYL (Your Money or Your Life), el contenido autogenerado no debe publicarse directamente sin supervisión. El flujo es el siguiente:
+Fase
+	Acción de Automatización / Humana
+	Objetivo SEO
+ 
+	Fase 1: Desinfección
+	Los prompts de Gemini (sección 3) eliminan cualquier firma del autor original de movingtospain.com.
+	Evitar la suplantación de identidad y crear una base "limpia".
+	Fase 2: Carga en Borrador
+	La API REST de WordPress sube el artículo con el estado "status": "draft".
+	Preparar el ecosistema para revisión sin indexación prematura de contenido IA crudo.
+	Fase 3: Curaduría YMYL
+	Un gestor de contenido o experto entra al panel de WordPress de canadiansinspain.com o colombianosespana.com. Revisa el artículo, ajusta matices legales y añade manualmente el bloque o etiqueta de "Revisado por el Experto X".
+	Cumplir con las directrices E-E-A-T (Experiencia, Conocimiento, Autoridad, Confianza) de Google, vital para posicionar temas legales y migratorios.

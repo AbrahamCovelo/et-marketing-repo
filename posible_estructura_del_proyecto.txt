@@ -1,0 +1,31 @@
+proyecto_localizacion/
+├── .env                        # Variables de entorno (API keys de Gemini, credenciales de WordPress, etc.)
+├── main.py                     # Script orquestador (controla el flujo de Extracción -> Generación -> Despliegue)
+├── requirements.txt            # Dependencias del proyecto (requests, google-generativeai, bs4, etc.)
+│
+├── /data/                      # Almacenamiento de datos locales
+│   └── source_articles.db      # AQUÍ va tu base de datos SQLite con los textos puros extraídos
+│
+├── /config/                    # Configuraciones y recursos estáticos
+│   ├── prompts.py              # Aquí guardas las variables de los prompts (canadian_english_prompt, etc.)
+│   └── cta_config.py           # Diccionarios con los enlaces CTA para inyectar en Python
+│
+├── /src/                       # Código fuente dividido por las 3 etapas de tu arquitectura
+│   │
+│   ├── /1_extraccion/          # Scripts para el ETL (Scrape Once)
+│   │   ├── scraper.py          # Lógica para rastrear movingtospain.com
+│   │   ├── cleaner.py          # Limpieza del HTML (quitar headers, footers)
+│   │   └── db_manager.py       # Funciones para guardar/leer de sqlite (source_articles.db)
+│   │
+│   ├── /2_generacion/          # Motor de Python para procesar con Gemini
+│   │   ├── gemini_client.py    # Conexión y peticiones a la API de Gemini 2.5 Flash
+│   │   └── content_builder.py  # Lógica que une el texto de SQLite con los prompts de /config/
+│   │
+│   └── /3_despliegue/          # Inyección y envío a CMS
+│       ├── cta_injector.py     # Script que reemplaza los [CTA_...] por HTML real
+│       └── wp_publisher.py     # Conexión a la REST API de WordPress para subir "Borradores"
+│
+└── /logs/                      # Archivos de registro para monitorear el sistema 
+    ├── scraping_errors.log     # Para revisar si falló alguna extracción
+    └── wp_upload.log           # Para confirmar qué artículos subieron correctamente a los sitios destino
+└── /extras/                    # Archivos que solo se usan una vez o referencias, o ideas
