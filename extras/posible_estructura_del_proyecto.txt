@@ -18,7 +18,7 @@ proyecto_localizacion/
 │   │   └── db_manager.py       # Funciones para guardar/leer de sqlite (source_articles.db)
 │   │
 │   ├── /2_generacion/          # Motor de Python para procesar con Gemini
-│   │   ├── gemini_client.py    # Conexión y peticiones a la API de Gemini 2.5 Flash
+│   │   ├── chat_client.py    # Conexión y peticiones a la API de Gemini 2.5 Flash
 │   │   └── content_builder.py  # Lógica que une el texto de SQLite con los prompts de /config/
 │   │
 │   └── /3_despliegue/          # Inyección y envío a CMS

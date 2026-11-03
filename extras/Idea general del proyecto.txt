@@ -9,13 +9,11 @@ Los sitios destino y sus respectivos idiomas son:
 
 
 
-
 2. Arquitectura de Distribución: El Patrón "Scrape Once, Fan Out"
 Para asegurar la estabilidad del proyecto, el proceso técnico consta de tres etapas aisladas. Esto evita la sobrecarga del servidor de origen y estandariza el texto base.
 1. Extracción y Staging (ETL): Un script en Python rastrea movingtospain.com una sola vez. Limpia el HTML (eliminando encabezados, pies de página y anuncios) y guarda el texto puro en una base de datos local SQLite (`source_articles`).
 2. Generación y Localización Multimodal: Un motor de Python lee la base de datos y envía el texto a Gemini 2.5 Flash junto con perfiles (prompts) hiper-específicos para cada cultura e idioma.
 3. Despliegue CMS (WordPress REST API): Los resultados formateados en HTML se inyectan automáticamente como "Borradores" (Drafts) en los respectivos sitios web de WordPress.
-
 
 
 

@@ -25,6 +25,9 @@ def parser():
     p.add_argument('--db', default='data/source_articles.db', help='Ruta de la base SQLite.')
     commands = p.add_subparsers(dest='command', required=True)
     commands.add_parser('init', help='Crear el esquema de la base de datos.')
+    dashboard = commands.add_parser('dashboard', help='Abrir el panel local de datos y extracción.')
+    dashboard.add_argument('--port', type=int, default=8765, help='Puerto local del panel (predeterminado: 8765).')
+    dashboard.add_argument('--open-browser', action='store_true', help='Abrir el navegador al iniciar.')
     for name in ('discover', 'scrape'):
         sub = commands.add_parser(name, help='Descubrir URLs.' if name == 'discover' else 'Extraer y guardar artículos.')
         sub.add_argument('--max-pages', type=int, default=3, help='Máximo de páginas del índice (predeterminado: 3).')
@@ -125,6 +128,9 @@ def main(argv=None):
         p.error('--delay no puede ser negativo.')
     db = None
     try:
+        if args.command == 'dashboard':
+            from src.dashboard.app import run
+            return run(args.db, port=args.port, open_browser=args.open_browser)
         db = Database(args.db)
         if args.command == 'init':
             emit({'database': str(Path(args.db).resolve()), 'status': 'initialized'})

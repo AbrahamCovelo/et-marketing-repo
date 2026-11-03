@@ -3,6 +3,9 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 .env
+.env.*
+!.env.example
+extras/EntreTramites.txt
 data/
 logs/
 *.egg-info/

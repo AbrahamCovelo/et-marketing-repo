@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="panel-token" content="{{ panel_token }}">
+  <title>ET · Panel de contenido</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='generation.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Ir al contenido</a>
+  <header class="header">
+    <div><p class="eyebrow">ET · Herramientas de contenido</p><h1>Panel de contenido</h1></div>
+    <span class="local-label">Base de datos local</span>
+  </header>
+
+  <main id="workspace">
+    <div id="app-error" class="notice error" role="alert" hidden></div>
+    <div id="app-notice" class="notice success" role="status" hidden></div>
+
+    <section class="summary" aria-label="Resumen de la base">
+      <div><strong id="stat-articles">—</strong><span>artículos</span></div>
+      <div><strong id="stat-review">—</strong><span>con avisos de revisión</span></div>
+      <div><strong id="stat-selected">—</strong><span>seleccionados</span></div>
+      <div><strong id="stat-words">—</strong><span>palabras conservadas</span></div>
+      <p id="date-coverage" class="muted"></p>
+    </section>
+
+    <section id="job-panel" class="job-panel" aria-label="Estado de la operación" hidden>
+      <div class="section-title"><h2 id="job-title">Operación</h2><span id="job-status" class="badge"></span></div>
+      <p id="job-message" role="status" aria-live="polite"></p>
+      <progress id="job-progress" aria-label="Avance de la operación"></progress>
+      <p id="job-counts" class="muted"></p>
+      <p id="job-current" class="current-url"></p>
+      <details id="job-errors-wrap" hidden><summary id="job-errors-title">Errores</summary><pre id="job-errors" class="small-pre"></pre></details>
+      <details id="job-urls-wrap" hidden><summary id="job-urls-title">URLs descubiertas</summary><pre id="job-urls" class="small-pre"></pre><button id="use-discovered" type="button">Usar estas URLs en una extracción</button></details>
+    </section>
+
+    <nav class="tabs main-tabs" aria-label="Secciones" role="tablist">
+      <button type="button" id="tab-review" role="tab" aria-selected="true" aria-controls="review-panel" data-main-tab="review">Revisión de datos</button>
+      <button type="button" id="tab-scraping" role="tab" aria-selected="false" aria-controls="scraping-panel" tabindex="-1" data-main-tab="scraping">Scraping</button>
+      <button type="button" id="tab-generation" role="tab" aria-selected="false" aria-controls="generation-panel" tabindex="-1" data-main-tab="generation">Preparación de adaptaciones</button>
+    </nav>
+
+    <section id="review-panel" role="tabpanel" aria-labelledby="tab-review">
+      <form id="search-form" class="filter-panel">
+        <div class="search-row">
+          <label class="grow">Buscar en título, texto o URL<input id="search-query" type="search" placeholder="Por ejemplo: visa, mascotas, Barcelona…" autocomplete="off" maxlength="500"></label>
+          <button type="submit" class="primary">Buscar</button>
+          <button id="reset-filters" type="button">Limpiar filtros</button>
+        </div>
+        <div class="filter-row">
+          <label>Fecha a consultar<select id="date-field"><option value="published_at">Publicación original</option><option value="modified_at">Modificación original</option><option value="captured_at">Extracción de versión</option></select></label>
+          <label>Desde<input id="date-from" type="date"></label>
+          <label>Hasta<input id="date-to" type="date"></label>
+          <label>Revisión<select id="review-filter"><option value="all">Todos los artículos</option><option value="needs_review">Con avisos de revisión</option><option value="clean">Sin avisos de revisión</option></select></label>
+          <label>Ordenar<select id="sort-order"><option value="published_desc">Publicación más reciente</option><option value="modified_desc">Modificación más reciente</option><option value="captured_desc">Versión más reciente</option><option value="title_asc">Título A–Z</option></select></label>
+          <label class="check-label"><input id="selected-only" type="checkbox">Solo seleccionados</label>
+        </div>
+        <p id="date-help" class="muted hint">Los extremos del rango se incluyen. Las fechas de publicación y modificación corresponden al sitio original.</p>
+      </form>
+
+      <div class="batch-bar">
+        <span id="selection-label">0 seleccionados</span>
+        <button id="select-page" type="button">Seleccionar página</button>
+        <button id="clear-selection" type="button" disabled>Vaciar selección</button>
+        <span class="batch-separator" aria-hidden="true"></span>
+        <button id="refresh-selected" type="button" disabled>Actualizar seleccionados</button>
+        <button id="reclean-selected" type="button" disabled>Limpiar copias locales</button>
+        <button id="adapt-selected" type="button" class="primary" disabled>Adaptar seleccionados…</button>
+      </div>
+      <p class="muted selection-hint">La selección se conserva entre sesiones para trabajar por lotes. Actualizar descarga el artículo; limpiar utiliza su respaldo local.</p>
+
+      <div class="review-grid">
+        <section class="article-list-panel" aria-label="Lista de artículos">
+          <div class="list-heading"><h2>Artículos</h2><span id="result-count" role="status" aria-live="polite">Cargando…</span></div>
+          <div id="article-list" class="article-list" aria-busy="true"></div>
+          <div class="pagination">
+            <button id="previous-page" type="button" aria-label="Página anterior" disabled>Anterior</button>
+            <span id="page-label">Página 1</span>
+            <button id="next-page" type="button" aria-label="Página siguiente" disabled>Siguiente</button>
+          </div>
+        </section>
+
+        <section class="detail-panel" aria-label="Detalle del artículo">
+          <div id="detail-empty" class="empty-state"><h2>Revise el contenido extraído</h2><p>Haga clic en un artículo de la lista para leer su texto, consultar sus fechas y ver qué se excluyó.</p></div>
+          <div id="detail-content" hidden>
+            <div class="detail-heading"><h2 id="detail-title" tabindex="-1"></h2><a id="export-link" class="button" href="#">Descargar JSON</a></div>
+            <p><a id="source-link" href="#" target="_blank" rel="noopener noreferrer">Abrir artículo original ↗</a></p>
+            <dl id="article-metadata" class="article-metadata"></dl>
+            <p id="detail-quality" class="quality-note"></p>
+            <nav class="tabs detail-tabs" aria-label="Información del artículo" role="tablist">
+              <button id="detail-tab-clean" type="button" role="tab" aria-selected="true" aria-controls="detail-reading" data-detail-tab="clean">Texto limpio</button>
+              <button id="detail-tab-original" type="button" role="tab" aria-selected="false" aria-controls="detail-reading" tabindex="-1" data-detail-tab="original">Original</button>
+              <button id="detail-tab-events" type="button" role="tab" aria-selected="false" aria-controls="detail-reading" tabindex="-1" data-detail-tab="events">Exclusiones</button>
+              <button id="detail-tab-blocks" type="button" role="tab" aria-selected="false" aria-controls="detail-reading" tabindex="-1" data-detail-tab="blocks">Bloques</button>
+              <button id="detail-tab-links" type="button" role="tab" aria-selected="false" aria-controls="detail-reading" tabindex="-1" data-detail-tab="links">Enlaces</button>
+              <button id="detail-tab-versions" type="button" role="tab" aria-selected="false" aria-controls="detail-reading" tabindex="-1" data-detail-tab="versions">Versiones</button>
+              <button id="detail-tab-adaptations" type="button" role="tab" aria-selected="false" aria-controls="detail-reading" tabindex="-1" data-detail-tab="adaptations">Adaptaciones</button>
+            </nav>
+            <section id="detail-reading" role="tabpanel" aria-labelledby="detail-tab-clean" tabindex="0">
+              <p id="reading-help" class="muted hint"></p>
+              <pre id="article-text" class="article-text"></pre>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="scraping-panel" role="tabpanel" aria-labelledby="tab-scraping" hidden>
+      <div class="operations-grid">
+        <section class="card">
+          <h2>Extraer o actualizar artículos</h2>
+          <p class="muted">Elija el origen y qué hacer con los artículos que ya están guardados.</p>
+          <form id="scrape-form">
+            <fieldset id="scrape-controls">
+              <div class="form-grid">
+                <label>Origen<select id="scrape-scope"><option value="catalog">Catálogo de guías</option><option value="urls">URLs específicas</option></select></label>
+                <label>Artículos existentes<select id="scrape-mode"><option value="new">Omitir: traer solo nuevos</option><option value="refresh">Volver a descargar y actualizar</option></select></label>
+              </div>
+              <div id="catalog-controls" class="form-grid compact-grid">
+                <label>Páginas del catálogo<input id="scrape-pages" type="number" min="1" max="500" step="1" value="3"></label>
+                <label class="check-label"><input id="scrape-all-pages" type="checkbox">Recorrer todo el catálogo</label>
+              </div>
+              <label id="urls-control" hidden>URLs de artículos, una por línea<textarea id="scrape-urls" rows="6" placeholder="https://movingtospain.com/…" spellcheck="false"></textarea></label>
+              <div class="form-grid">
+                <label>Límite de artículos (opcional)<input id="scrape-limit" type="number" min="1" max="5000" step="1" placeholder="Sin límite adicional"></label>
+                <label>Filtrar por fecha de origen<select id="scrape-date-field"><option value="published_at">Publicación original</option><option value="modified_at">Última modificación original</option></select></label>
+                <label>Desde (opcional)<input id="scrape-date-from" type="date"></label>
+                <label>Hasta (opcional)<input id="scrape-date-to" type="date"></label>
+              </div>
+              <p class="muted hint">Para comprobar la fecha de origen hay que descargar la página. Solo se guardan los artículos que cumplen el rango; los que no tienen esa fecha se contabilizan aparte. Descubrir URLs consulta el índice y no aplica este filtro.</p>
+              <div class="actions"><button id="start-scrape" type="submit" class="primary">Ejecutar extracción</button><button id="discover-urls" type="button">Descubrir URLs</button></div>
+            </fieldset>
+          </form>
+        </section>
+        <section class="card local-clean-card">
+          <h2>Repetir la limpieza</h2>
+          <p>Procesa otra vez los respaldos de todos los artículos guardados. Conserva el historial y no vuelve a descargarlos.</p>
+          <button id="reclean-all" type="button">Limpiar todos los respaldos</button>
+          <p class="muted hint">Para trabajar únicamente con algunos artículos, selecciónelos en Revisión de datos.</p>
+        </section>
+      </div>
+      <section class="card history-card">
+        <div class="section-title"><h2>Historial de ejecuciones</h2><button id="refresh-runs" type="button">Actualizar historial</button></div>
+        <p class="muted">Incluye las ejecuciones del panel y las realizadas desde la consola.</p>
+        <div class="table-scroll"><table class="runs-table"><thead><tr><th>Operación</th><th>Inicio · Bogotá</th><th>Estado</th><th>Resultado</th></tr></thead><tbody id="runs-body"></tbody></table></div>
+        <p id="runs-empty" class="muted" hidden>Aún no hay ejecuciones registradas.</p>
+      </section>
+    </section>
+    <section id="generation-panel" role="tabpanel" aria-labelledby="tab-generation" hidden>
+      <section class="card preparation-banner">
+        <div class="section-title"><h2>Preparar la adaptación de artículos</h2><span class="badge">Modo preparación · Sin llamadas a API</span></div>
+        <p>Defina destinos, guarde versiones de los prompts y combine ambos en configuraciones. Después seleccione artículos en Revisión de datos y pulse «Adaptar seleccionados».</p>
+        <p class="muted">Las plantillas y los modelos están pendientes de definición. Guardar una preparación conserva las versiones elegidas; todavía no crea un artículo adaptado.</p>
+        <p id="generation-credentials" class="muted hint" role="status">Consultando configuración local…</p>
+        <button type="button" disabled aria-describedby="generation-disabled-help">Generar adaptaciones</button>
+        <p id="generation-disabled-help" class="muted hint">Generación deshabilitada en esta fase. Ninguna acción de esta sección envía contenido a una API.</p>
+      </section>
+      <nav class="tabs generation-tabs" role="tablist" aria-label="Gestión de adaptaciones">
+        <button id="generation-tab-configurations" type="button" role="tab" aria-selected="true" aria-controls="generation-configurations" data-generation-tab="configurations">Configuraciones</button>
+        <button id="generation-tab-prompts" type="button" role="tab" aria-selected="false" aria-controls="generation-prompts" tabindex="-1" data-generation-tab="prompts">Prompts</button>
+        <button id="generation-tab-destinations" type="button" role="tab" aria-selected="false" aria-controls="generation-destinations" tabindex="-1" data-generation-tab="destinations">Destinos</button>
+        <button id="generation-tab-plans" type="button" role="tab" aria-selected="false" aria-controls="generation-plans" tabindex="-1" data-generation-tab="plans">Preparaciones guardadas</button>
+      </nav>
+      <div id="generation-error" class="notice error" role="alert" hidden></div>
+      <div id="generation-notice" class="notice success" role="status" hidden></div>
+
+      <section id="generation-configurations" role="tabpanel" aria-labelledby="generation-tab-configurations" class="card generation-editor">
+        <h2>Configuraciones de adaptación</h2>
+        <p class="muted">Cada configuración une un destino con una versión concreta de un prompt. Una nueva versión del prompt no cambia automáticamente las configuraciones existentes.</p>
+        <label>Configuración a editar<select id="configuration-picker"><option value="">Nueva configuración</option></select></label>
+        <p id="configuration-version" class="muted hint"></p>
+        <form id="configuration-form">
+          <fieldset id="configuration-controls">
+            <label>Nombre<input id="configuration-name" required maxlength="200" placeholder="Por ejemplo: Canadá · Inglés · Guía práctica"></label>
+            <div class="form-grid">
+              <label>Destino<select id="configuration-destination" required></select></label>
+              <label>Versión del prompt<select id="configuration-prompt" required></select></label>
+              <label>Proveedor previsto<select id="configuration-provider"><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select></label>
+              <label>Modelo previsto (opcional)<input id="configuration-model" maxlength="200" placeholder="Por definir" autocomplete="off"></label>
+            </div>
+            <label>Notas<textarea id="configuration-notes" rows="3" maxlength="10000"></textarea></label>
+            <label class="check-label"><input id="configuration-enabled" type="checkbox" checked>Disponible para preparar artículos</label>
+            <div id="configuration-warnings" class="preparation-warnings" role="status"></div>
+            <div class="actions"><button type="submit" class="primary">Guardar configuración</button><button id="configuration-new" type="button">Crear otra configuración</button></div>
+          </fieldset>
+        </form>
+        <details id="configuration-prompt-detail" class="prompt-history" hidden>
+          <summary>Leer el prompt guardado en esta configuración</summary>
+          <p class="muted hint">Muestra la versión guardada. Si cambia la selección del prompt, guarde la configuración para actualizar esta vista.</p>
+          <p id="configuration-prompt-label" class="muted hint"></p>
+          <pre id="configuration-prompt-text" class="small-pre"></pre>
+        </details>
+      </section>
+
+      <section id="generation-prompts" role="tabpanel" aria-labelledby="generation-tab-prompts" class="card generation-editor" hidden>
+        <h2>Prompts y versiones</h2>
+        <p class="muted">Los borradores iniciales están vacíos, a la espera de las plantillas de sus socios. Guardar cambios conserva la versión anterior.</p>
+        <label>Prompt a editar<select id="prompt-picker"><option value="">Nuevo prompt</option></select></label>
+        <p id="prompt-version" class="muted hint"></p>
+        <form id="prompt-form">
+          <fieldset id="prompt-controls">
+            <div class="form-grid">
+              <label>Nombre<input id="prompt-name" required maxlength="200"></label>
+              <label>Estado<select id="prompt-status"><option value="draft">Borrador · pendiente de revisión</option><option value="reviewed">Revisado</option></select></label>
+            </div>
+            <label>Descripción<textarea id="prompt-description" rows="2" maxlength="10000"></textarea></label>
+            <label>Instrucciones del sistema<textarea id="prompt-system" class="code-input" rows="7" spellcheck="false" placeholder="Pendiente de la plantilla acordada"></textarea></label>
+            <label>Plantilla del mensaje<textarea id="prompt-template" class="code-input" rows="10" spellcheck="false" placeholder="Pendiente de la plantilla acordada"></textarea></label>
+            <p class="muted hint">Variables disponibles: <span id="prompt-placeholders"></span>. Para marcar un prompt como revisado, incluya instrucciones, plantilla y el texto o JSON del artículo.</p>
+            <label class="check-label"><input id="prompt-archived" type="checkbox">Archivado · no disponible para nuevas preparaciones</label>
+            <div class="actions"><button type="submit" class="primary">Guardar versión del prompt</button><button id="prompt-new" type="button">Crear otro prompt</button></div>
+          </fieldset>
+        </form>
+        <details class="prompt-history"><summary>Versiones conservadas</summary><div id="prompt-history" class="history-list"></div></details>
+      </section>
+
+      <section id="generation-destinations" role="tabpanel" aria-labelledby="generation-tab-destinations" class="card generation-editor" hidden>
+        <h2>Destinos e idiomas</h2>
+        <p class="muted">Hay tres combinaciones iniciales: Canadians In Spain en inglés y francés, y Colombians in Spain en español. Revise las URLs antes de definir las plantillas.</p>
+        <label>Destino a editar<select id="destination-picker"><option value="">Nuevo destino</option></select></label>
+        <form id="destination-form">
+          <fieldset id="destination-controls">
+            <div class="form-grid">
+              <label>Nombre<input id="destination-name" required maxlength="200"></label>
+              <label>Idioma y región<input id="destination-locale" required maxlength="35" placeholder="en-CA, fr-CA o es-CO" spellcheck="false"></label>
+            </div>
+            <label>URL del sitio<input id="destination-url" type="url" required maxlength="2000" placeholder="https://…"></label>
+            <label>Notas<textarea id="destination-notes" rows="4" maxlength="10000"></textarea></label>
+            <label class="check-label"><input id="destination-enabled" type="checkbox" checked>Destino disponible</label>
+            <div class="actions"><button type="submit" class="primary">Guardar destino</button><button id="destination-new" type="button">Crear otro destino</button></div>
+          </fieldset>
+        </form>
+      </section>
+
+      <section id="generation-plans" role="tabpanel" aria-labelledby="generation-tab-plans" class="card" hidden>
+        <div class="section-title"><h2>Preparaciones guardadas</h2><button id="refresh-plans" type="button">Actualizar</button></div>
+        <p class="muted">Una preparación guarda la selección y sus versiones. No implica generación, adaptación final ni envío a una API. Puede cancelarla sin borrar el historial.</p>
+        <div id="preparation-list" class="history-list" aria-live="polite"></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="adapt-dialog" aria-labelledby="adapt-dialog-title" aria-describedby="adapt-dialog-description">
+    <div class="section-title"><h2 id="adapt-dialog-title">Adaptar artículos · Preparación</h2><button id="close-adapt-dialog" type="button" aria-label="Cerrar preparación">Cerrar</button></div>
+    <p id="adapt-dialog-description">Elija una o varias configuraciones. Solo se preparará el trabajo: hoy no se generará contenido ni se gastará saldo de API.</p>
+    <p id="adapt-article-count" class="muted"></p>
+    <div id="adapt-error" class="notice error" role="alert" hidden></div>
+    <div id="adapt-notice" class="notice success" role="status" hidden></div>
+    <fieldset class="configuration-choices"><legend>Configuraciones disponibles</legend><div id="adapt-configurations"></div></fieldset>
+    <p id="adapt-pair-count" role="status" aria-live="polite"></p>
+    <p class="muted hint">Máximo 500 combinaciones por preparación. Al guardar se fijan las versiones vigentes en ese momento. Si cambió un artículo o una configuración en otra pestaña, vuelva a previsualizar antes de guardar. Los borradores pueden guardarse para revisión; conservar una preparación no la convierte en adaptación.</p>
+    <div class="actions"><button id="preview-preparation" type="button">Previsualizar preparación</button><button id="save-preparation" type="button" class="primary">Guardar preparación</button><button type="button" disabled>Generar · Deshabilitado</button></div>
+    <section id="preparation-preview" class="preparation-preview" aria-label="Vista previa local" hidden>
+      <h3>Vista previa local</h3><p id="preview-summary" class="muted"></p>
+      <div id="preview-warnings" class="preparation-warnings"></div>
+      <details open><summary>Instrucciones del sistema · primer ejemplo</summary><pre id="preview-system" class="small-pre"></pre></details>
+      <details open><summary>Plantilla completada · primer ejemplo</summary><pre id="preview-template" class="small-pre"></pre></details>
+      <details><summary>Datos del artículo que recibirá la plantilla</summary><pre id="preview-source" class="small-pre"></pre></details>
+    </section>
+  </dialog>
+  <footer>Las fechas del sitio original y las de extracción de cada versión se muestran por separado. Los avisos de revisión no equivalen a errores de descarga.</footer>
+</body>
+</html>
