@@ -134,6 +134,15 @@
     fillDestination(state.destinationId);
     fillPrompt(state.promptId);
     fillConfiguration(state.configurationId);
+    const reference = catalog.model_reference || {};
+    const models = reference.models || [];
+    options($("adapt-model"), [...models.map((model) => ({id: model.id, label: model.label})), {id: "custom", label: "Otro modelo GPT…"}], "Usar el modelo de cada configuración", "");
+    $("gpt-model-options").replaceChildren(...models.map((model) => {
+      const option = node("option", model.label);
+      option.value = model.id;
+      return option;
+    }));
+    $("adapt-model-reference").textContent = `Opciones de referencia revisadas el ${reference.checked_at || "—"}. La disponibilidad y las tarifas se comprobarán al activar las pruebas; elegir un modelo ahora no lo ejecuta.`;
   }
 
   async function loadCatalog({ force = false } = {}) {
@@ -191,14 +200,28 @@
     return [...$("adapt-configurations").querySelectorAll("input:checked")].map((input) => Number(input.value));
   }
 
+  function selectedModel() {
+    return $("adapt-model").value === "custom" ? $("adapt-custom-model").value.trim() : $("adapt-model").value;
+  }
+
   function syncDialog() {
     const configurations = selectedConfigurationIds().length;
     const pairs = state.articleIds.length * configurations;
+    const invalidModel = $("adapt-model").value === "custom" && !/^gpt-[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(selectedModel());
     $("adapt-pair-count").textContent = `${state.articleIds.length} artículos × ${configurations} configuraciones = ${pairs} combinaciones${pairs > 500 ? " · Reduzca la selección a un máximo de 500." : ""}`;
-    $("preview-preparation").disabled = state.dialogBusy || !pairs || pairs > 500;
-    $("save-preparation").disabled = state.dialogBusy || !pairs || pairs > 500;
+    $("preview-preparation").disabled = state.dialogBusy || !pairs || pairs > 500 || invalidModel;
+    $("save-preparation").disabled = state.dialogBusy || !pairs || pairs > 500 || invalidModel;
+    $("adapt-model-controls").disabled = state.dialogBusy;
+    $("adapt-custom-model-wrap").hidden = $("adapt-model").value !== "custom";
     $("close-adapt-dialog").disabled = state.dialogBusy;
-    $("adapt-configurations").querySelectorAll("input").forEach((input) => { input.disabled = state.dialogBusy; });
+    $("adapt-configurations").querySelectorAll("input").forEach((input) => {
+      input.disabled = state.dialogBusy;
+      const configuration = find("configurations", input.value);
+      const chosen = !invalidModel && selectedModel() && configuration.provider === "openai" ? selectedModel() : configuration.model;
+      const label = input.closest("label");
+      label.querySelector(".choice-model").textContent = `${configuration.provider === "openai" ? "OpenAI" : "Gemini"} · Modelo del lote: ${chosen || "por definir"}`;
+      warningList(label.querySelector(".choice-warnings"), (configuration.warnings || []).filter((warning) => !chosen || warning !== "Falta elegir un modelo."));
+    });
     $("adapt-dialog").setAttribute("aria-busy", String(state.dialogBusy));
   }
 
@@ -217,7 +240,7 @@
       const description = node("span");
       description.append(node("strong", configuration.name));
       description.append(node("span", `${configuration.destination_name} · ${configuration.locale} · Configuración v${configuration.current_version} · ${configuration.prompt_name} v${configuration.prompt_version}`, "muted"));
-      description.append(node("span", `${configuration.provider === "openai" ? "OpenAI" : "Gemini"} · Modelo: ${configuration.model || "por definir"}`, "muted"));
+      description.append(node("span", "", "muted choice-model"));
       const warnings = node("div", null, "choice-warnings");
       warningList(warnings, configuration.warnings);
       description.append(warnings);
@@ -238,6 +261,8 @@
     if ($("adapt-dialog").open) return;
     const sequence = ++state.dialogSequence;
     state.articleIds = [];
+    $("adapt-model").value = "";
+    $("adapt-custom-model").value = "";
     state.dialogBusy = true;
     $("adapt-article-count").textContent = "Cargando la selección guardada…";
     $("adapt-configurations").replaceChildren();
@@ -259,7 +284,7 @@
 
   function renderPreview(preview) {
     const example = preview.example || {};
-    $("preview-summary").textContent = `${preview.pair_count} combinaciones comprobadas localmente. Se muestra el primer ejemplo: artículo #${example.article_id || "—"}, configuración #${example.configuration_id || "—"}. No es una adaptación generada.`;
+    $("preview-summary").textContent = `${preview.pair_count} combinaciones comprobadas localmente. Se muestra el primer ejemplo: artículo #${example.article_id || "—"}, configuración #${example.configuration_id || "—"}. Modelo: ${example.generation_options?.model || "por definir"}. No es una adaptación generada.`;
     const warnings = [...(preview.warnings || []), ...(example.warnings || [])];
     warningList($("preview-warnings"), warnings);
     $("preview-system").textContent = example.system_prompt || "Sin instrucciones del sistema · pendiente de plantilla.";
@@ -278,7 +303,7 @@
     message("adapt-notice", "");
     try {
       const result = await panel.api(`/api/generation/${action === "preview" ? "preview" : "plans"}`, {
-        method: "POST", body: JSON.stringify({ article_ids: state.articleIds, configuration_ids: configurationIds }),
+        method: "POST", body: JSON.stringify({ article_ids: state.articleIds, configuration_ids: configurationIds, model_override: selectedModel() }),
       });
       if (action === "preview") {
         renderPreview(result);
@@ -300,6 +325,7 @@
     const line = node("li");
     line.append(node("strong", article), node("span", `${config} · Configuración v${version} · Prompt v${promptVersion} · Origen #${item.source_version_id || item.article_version_id || "—"}`, "muted"));
     if (item.destination_name) line.append(node("span", `${item.destination_name}${item.locale ? ` · ${item.locale}` : ""}`, "muted"));
+    line.append(node("span", `Modelo previsto: ${item.provider || "—"} · ${item.model || "por definir"}`, "muted"));
     const changes = [];
     if (item.source_changed) changes.push("El artículo tiene una versión más reciente.");
     if (item.configuration_changed) changes.push("La configuración ha cambiado.");
@@ -430,6 +456,12 @@
     });
   });
   $("adapt-selected").addEventListener("click", openDialog);
+  ["adapt-model", "adapt-custom-model"].forEach((id) => $(id).addEventListener("input", () => {
+    $("preparation-preview").hidden = true;
+    message("adapt-notice", "");
+    message("adapt-error", "");
+    syncDialog();
+  }));
   $("close-adapt-dialog").addEventListener("click", () => $("adapt-dialog").close());
   $("adapt-dialog").addEventListener("cancel", (event) => { if (state.dialogBusy) event.preventDefault(); });
   $("preview-preparation").addEventListener("click", () => prepare("preview"));

@@ -3,6 +3,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from src.generation.preparation import PLACEHOLDERS, execute_generation, preview_preparation
 from src.generation.settings import public_status
+from src.generation.model_options import MODEL_REFERENCE
 
 
 def register_generation_routes(app, repository):
@@ -18,9 +19,10 @@ def register_generation_routes(app, repository):
 
     def selection_payload():
         body = payload()
-        if set(body) != {'article_ids', 'configuration_ids'}:
-            raise ValueError('Se requieren article_ids y configuration_ids.')
-        return body['article_ids'], body['configuration_ids']
+        required = {'article_ids', 'configuration_ids'}
+        if not required <= set(body) or set(body) - required - {'model_override'}:
+            raise ValueError('Se requieren article_ids y configuration_ids; model_override es opcional.')
+        return body['article_ids'], body['configuration_ids'], body.get('model_override')
 
     @routes.get('/api/generation/catalog')
     def catalog():
@@ -28,6 +30,7 @@ def register_generation_routes(app, repository):
             **repository.catalog(),
             **public_status(env_path=current_app.config['GENERATION_ENV_PATH']),
             placeholders=PLACEHOLDERS,
+            model_reference=MODEL_REFERENCE,
         )
 
     @routes.post('/api/generation/destinations')
@@ -60,13 +63,13 @@ def register_generation_routes(app, repository):
 
     @routes.post('/api/generation/preview')
     def preview():
-        article_ids, configuration_ids = selection_payload()
-        return jsonify(preview_preparation(current_app.config['DATABASE_PATH'], article_ids, configuration_ids))
+        article_ids, configuration_ids, model_override = selection_payload()
+        return jsonify(preview_preparation(current_app.config['DATABASE_PATH'], article_ids, configuration_ids, model_override))
 
     @routes.post('/api/generation/plans')
     def prepare_plan():
-        article_ids, configuration_ids = selection_payload()
-        return jsonify(repository.create_plan(article_ids, configuration_ids)), 201
+        article_ids, configuration_ids, model_override = selection_payload()
+        return jsonify(repository.create_plan(article_ids, configuration_ids, model_override)), 201
 
     @routes.get('/api/generation/plans')
     def plans():
@@ -90,6 +93,10 @@ def register_generation_routes(app, repository):
     @routes.get('/api/articles/<int:article_id>/adaptations')
     def article_adaptations(article_id):
         return jsonify(repository.article_history(article_id))
+
+    @routes.get('/api/generation/trials/<int:trial_id>')
+    def trial_detail(trial_id):
+        return jsonify(repository.trial_detail(trial_id))
 
     @routes.post('/api/generation/execute')
     def execute_disabled():

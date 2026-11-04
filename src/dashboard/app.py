@@ -17,6 +17,9 @@ from src.generation.preparation import GenerationDisabledError
 from .generation_routes import register_generation_routes
 from .jobs import JobBusyError, JobManager
 from .repository import Repository
+from src.deployment.repository import DeploymentRepository
+from src.deployment.wp_publisher import DeploymentDisabledError
+from .deployment_routes import register_deployment_routes
 
 
 def _integer(value, name: str, default: int) -> int:
@@ -44,16 +47,19 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
         MAX_CONTENT_LENGTH=512 * 1024,
         TRUSTED_HOSTS=['127.0.0.1', 'localhost', '[::1]'],
         GENERATION_ENV_PATH=str(Path(__file__).resolve().parents[2] / '.env'),
+        DEPLOYMENT_ENV_PATH=str(Path(__file__).resolve().parents[2] / '.env'),
     )
     if test_config:
         app.config.update(test_config)
     app.json.ensure_ascii = False
     repository = Repository(app.config['DATABASE_PATH'])
     generation = GenerationRepository(app.config['DATABASE_PATH'])
+    deployment = DeploymentRepository(app.config['DATABASE_PATH'], app.config['DEPLOYMENT_ENV_PATH'])
     jobs = job_manager if job_manager is not None else JobManager(app.config['DATABASE_PATH'])
     app.extensions['panel_repository'] = repository
     app.extensions['panel_jobs'] = jobs
     app.extensions['generation_repository'] = generation
+    app.extensions['deployment_repository'] = deployment
 
     @app.before_request
     def protect_local_actions():
@@ -89,6 +95,10 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
 
     @app.errorhandler(GenerationDisabledError)
     def generation_disabled(error):
+        return jsonify(error=str(error), mode='preparation', execution_enabled=False), 409
+
+    @app.errorhandler(DeploymentDisabledError)
+    def deployment_disabled(error):
         return jsonify(error=str(error), mode='preparation', execution_enabled=False), 409
 
     @app.errorhandler(JobBusyError)
@@ -158,6 +168,10 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
             raise ValueError('Se requieren article_ids y selected.')
         return jsonify(repository.set_selection(data['article_ids'], data['selected']))
 
+    @app.post('/api/selection/matching')
+    def select_matching():
+        return jsonify(repository.select_matching(**payload()))
+
     @app.get('/api/runs')
     def runs():
         return jsonify(items=repository.recent_runs(limit=_integer(request.args.get('limit'), 'limit', 20)))
@@ -175,6 +189,7 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
         return jsonify(jobs.submit(payload())), 202
 
     register_generation_routes(app, generation)
+    register_deployment_routes(app, deployment)
     return app
 
 

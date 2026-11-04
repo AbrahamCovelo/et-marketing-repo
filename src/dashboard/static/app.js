@@ -22,6 +22,7 @@
     listController: null, detailController: null, searchTimer: null,
     listSequence: 0, detailSequence: 0, jobTimer: null, job: null,
     busy: false, submitting: false, selectionBusy: false, completedJob: null,
+    loadedFilters: null,
   };
 
   function node(tag, text, className) {
@@ -81,6 +82,26 @@
     } catch { return null; }
   }
 
+  function safeWordPressEditorUrl(value) {
+    try {
+      const url = new URL(value);
+      const knownHosts = ["colombianosespana.com", "canadiansinspain.com"];
+      if (url.protocol !== "https:" || !knownHosts.includes(url.host) || url.username || url.password
+          || url.pathname !== "/wp-admin/post.php" || url.hash
+          || !/^[1-9]\d*$/.test(url.searchParams.get("post") || "")
+          || url.searchParams.get("action") !== "edit" || [...url.searchParams].length !== 2) return null;
+      return url.href;
+    } catch { return null; }
+  }
+
+  function deploymentLabel(deployment) {
+    const labels = {
+      draft: "Borrador guardado en WordPress", sending: "Envío en curso",
+      failed: "Envío fallido", unknown: "Resultado del envío incierto",
+    };
+    return deployment ? (labels[deployment.status] || "Estado de envío no disponible") : "Sin envío a WordPress";
+  }
+
   function validRange(from, to) {
     if (from && to && from > to) {
       throw new Error("La fecha inicial no puede ser posterior a la fecha final.");
@@ -99,6 +120,8 @@
     $("adapt-selected").disabled = !selected || working || state.selectionBusy;
     $("clear-selection").disabled = !selected || state.selectionBusy;
     $("select-page").disabled = !state.items.length || state.selectionBusy;
+    $("select-all-results").disabled = !state.total || state.selectionBusy || !state.loadedFilters;
+    $("select-all-results").textContent = `Seleccionar todos los resultados (${number.format(state.total)})`;
     $("scrape-controls").disabled = working;
     $("reclean-all").disabled = working || !Number(state.summary.articles || 0);
     $("use-discovered").disabled = working;
@@ -159,6 +182,8 @@
     if (state.listController) state.listController.abort();
     state.listController = new AbortController();
     const sequence = ++state.listSequence;
+    state.loadedFilters = null;
+    syncControls();
     $("article-list").setAttribute("aria-busy", "true");
     $("result-count").textContent = "Buscando…";
     try {
@@ -168,6 +193,10 @@
       state.total = Number(data.total || 0);
       state.page = Number(data.page || 1);
       state.pages = Math.max(1, Number(data.pages || 1));
+      state.loadedFilters = Object.fromEntries(params);
+      delete state.loadedFilters.page;
+      delete state.loadedFilters.page_size;
+      state.loadedFilters.selected_only = state.loadedFilters.selected_only === "true";
       if (state.page > state.pages) {
         state.page = state.pages;
         await loadList();
@@ -254,6 +283,21 @@
     }
   }
 
+  async function selectAllResults() {
+    if (state.selectionBusy || !state.loadedFilters) return;
+    const filters = { ...state.loadedFilters };
+    state.selectionBusy = true;
+    syncControls();
+    clearError();
+    try {
+      const result = await api("/api/selection/matching", { method: "POST", body: JSON.stringify(filters) });
+      state.summary.selected_count = result.selected_count;
+      await loadList();
+      notice(`${result.matched_count} resultados incluidos en la selección, entre todas las páginas. Total seleccionado: ${result.selected_count}.`);
+    } catch (error) { showError(error.message); }
+    finally { state.selectionBusy = false; syncControls(); }
+  }
+
   function metadata(label, value, title) {
     const entry = node("div");
     entry.append(node("dt", label), node("dd", value));
@@ -312,6 +356,7 @@
 
   function renderReading() {
     if (!state.detail) return;
+    document.getElementById("trial-results")?.remove();
     const detail = state.detail;
     document.querySelectorAll("[data-detail-tab]").forEach((button) => {
       const active = button.dataset.detailTab === state.detailTab;
@@ -352,6 +397,22 @@
         const history = detail.adaptations || {};
         const items = history.items || [];
         value = history.message || "Todavía no hubo adaptaciones.";
+        const trials = history.trials || [];
+        if (trials.length) {
+          const trialLabels = {
+            completed: "Generada · pendiente de revisión editorial", incomplete: "Incompleta",
+            failed: "Fallida", unknown: "Resultado incierto · sin reintento automático", running: "En curso",
+          };
+          value += "\n\nPRUEBAS DE ADAPTACIÓN\n\n" + trials.map((trial) => [
+            `Prueba #${trial.id} · ${trial.configuration_name} · ${trial.destination_name}`,
+            `Estado: ${trialLabels[trial.status] || trial.status}`,
+            `Modelo: ${trial.model} · ${capturedDate(trial.created_at)}`,
+            `Configuración v${trial.configuration_version} · Versión de origen #${trial.source_version_id}`,
+            `Tokens de entrada: ${trial.usage?.input_tokens ?? "—"} · salida: ${trial.usage?.output_tokens ?? "—"}`,
+            `WordPress: ${deploymentLabel(trial.deployment)}`,
+          ].join("\n")).join("\n\n");
+          renderTrialResults(trials);
+        }
         if (items.length) {
           value += "\n\nPREPARACIONES LOCALES · NO GENERADAS\n\n" + items.map((item) => {
             const configuration = item.configuration_name || item.configuration_snapshot?.name || `Configuración #${item.configuration_id}`;
@@ -368,11 +429,12 @@
               `Estado: ${item.status === "cancelled" ? "Cancelada" : "Preparada · sin generar"}`,
               `Configuración v${version || "—"} · Prompt v${promptVersion || "—"} · Versión de origen #${item.source_version_id || item.article_version_id || "—"}`,
               `Preparación #${item.plan_id || item.id || "—"} · ${capturedDate(item.created_at)}`,
+              `Modelo previsto: ${item.provider || "—"} · ${item.model || "por definir"}`,
               ...flags,
             ].join("\n");
           }).join("\n\n────────────────────────────────────────\n\n");
         }
-        help = "Este historial distingue los artículos adaptados de las preparaciones locales. La generación está deshabilitada; guardar una preparación no crea una adaptación.";
+        help = "Las pruebas generadas conservan su resultado para revisión editorial. Los resultados incompletos no cuentan como adaptaciones. Guardar una preparación no genera contenido; la ejecución en masa sigue deshabilitada.";
         break;
       }
       default:
@@ -382,6 +444,43 @@
     $("reading-help").textContent = help;
     $("article-text").textContent = value || "Sin contenido disponible.";
     $("article-text").scrollTop = 0;
+  }
+
+  function renderTrialResults(trials) {
+    const container = node("div");
+    container.id = "trial-results";
+    for (const trial of trials) {
+      const editorUrl = trial.deployment?.status === "draft" && safeWordPressEditorUrl(trial.deployment.editor_url);
+      if (editorUrl) {
+        const paragraph = node("p");
+        const link = node("a", `Abrir borrador de la prueba #${trial.id} en WordPress`);
+        link.href = editorUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        paragraph.append(link);
+        container.append(paragraph);
+      }
+      const details = node("details");
+      details.append(node("summary", `Revisar HTML de la prueba #${trial.id} · ${trial.model}`));
+      const content = node("pre", "Abra este detalle para cargar el resultado guardado.", "article-text");
+      details.append(content);
+      let loaded = false;
+      let loading = false;
+      details.addEventListener("toggle", async () => {
+        if (!details.open || loaded || loading) return;
+        loading = true;
+        content.textContent = "Cargando resultado guardado…";
+        try {
+          const result = await api(`/api/generation/trials/${encodeURIComponent(trial.id)}`);
+          content.textContent = result.html || "Esta prueba no dejó contenido disponible.";
+          loaded = true;
+        } catch (error) {
+          content.textContent = error.message;
+        } finally { loading = false; }
+      });
+      container.append(details);
+    }
+    $("detail-reading").append(container);
   }
 
   function switchMainTab(name) {
@@ -602,6 +701,7 @@
   $("previous-page").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; loadList(); } });
   $("next-page").addEventListener("click", () => { if (state.page < state.pages) { state.page += 1; loadList(); } });
   $("select-page").addEventListener("click", () => setSelection(state.items.map((item) => item.id), true));
+  $("select-all-results").addEventListener("click", selectAllResults);
   $("clear-selection").addEventListener("click", async () => {
     try { await setSelection(await selectedIds(), false); }
     catch (error) { showError(error.message); }

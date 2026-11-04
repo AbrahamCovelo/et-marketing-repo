@@ -161,3 +161,52 @@ def test_invalid_batch_is_atomic_and_actions_require_token(generation_panel):
     assert client.get('/api/generation/configurations/999').status_code == 404
     with sqlite3.connect(path) as db:
         assert not db.execute('pragma foreign_key_check').fetchall()
+
+
+def test_preview_and_plan_use_same_batch_model_without_touching_configs(generation_panel):
+    _, client, _, _ = generation_panel
+    body = {'article_ids': [1, 2], 'configuration_ids': [1, 2, 3], 'model_override': 'gpt-6-luna'}
+    original = client.get('/api/generation/catalog').json
+    preview = mutate(generation_panel, '/api/generation/preview', body)
+    assert preview.status_code == 200
+    assert preview.json['example']['generation_options'] == {'provider': 'openai', 'model': 'gpt-6-luna'}
+    assert all(item['generation_options']['model'] == 'gpt-6-luna' for item in preview.json['items'])
+    assert not any('seleccionado un modelo' in warning for warning in preview.json['warnings'])
+    plan = mutate(generation_panel, '/api/generation/plans', body)
+    assert plan.status_code == 201 and plan.json['item_count'] == 6
+    assert all(item['model'] == 'gpt-6-luna' for item in plan.json['items'])
+    assert client.get('/api/generation/catalog').json == original
+    assert mutate(generation_panel, '/api/generation/execute', body).status_code == 409
+
+
+@pytest.mark.parametrize('model', [True, {}, 25, 'https://example.test', 'gemini-anything', 'gpt model', 'gpt-' + 'x'*200])
+def test_invalid_batch_models_are_rejected_before_any_plan(generation_panel, model):
+    _, client, _, _ = generation_panel
+    body = {'article_ids': [1], 'configuration_ids': [1], 'model_override': model}
+    assert mutate(generation_panel, '/api/generation/preview', body).status_code == 400
+    assert mutate(generation_panel, '/api/generation/plans', body).status_code == 400
+    assert client.get('/api/generation/plans').json['items'] == []
+
+
+def test_gpt_override_rejects_mixed_providers_atomically(generation_panel):
+    _, client, _, _ = generation_panel
+    config = client.get('/api/generation/configurations/2').json['configuration']
+    fields = {key: config[key] for key in ('name', 'destination_id', 'prompt_version_id', 'model', 'notes', 'enabled')}
+    changed = mutate(generation_panel, '/api/generation/configurations/2', {**fields, 'provider': 'gemini'}, method='PUT')
+    assert changed.status_code == 200
+    body = {'article_ids': [1], 'configuration_ids': [1, 2], 'model_override': 'gpt-6-luna'}
+    assert mutate(generation_panel, '/api/generation/preview', body).status_code == 400
+    assert mutate(generation_panel, '/api/generation/plans', body).status_code == 400
+    assert client.get('/api/generation/plans').json['items'] == []
+
+
+def test_select_all_uses_filters_and_requires_csrf(generation_panel):
+    _, client, _, _ = generation_panel
+    assert client.post('/api/selection/matching', json={}).status_code == 403
+    response = mutate(generation_panel, '/api/selection/matching', {'q': 'Second', 'date_from': '2026-01-01', 'date_to': '2026-01-01'})
+    assert response.status_code == 200 and response.json['matched_count'] == 1
+    assert [item['id'] for item in client.get('/api/articles?selected_only=true').json['items']] == [2]
+    response = mutate(generation_panel, '/api/selection/matching', {})
+    assert response.json['selected_count'] == 2 and response.json['added_count'] == 1
+    assert mutate(generation_panel, '/api/selection/matching', {'execute': True}).status_code == 400
+    assert mutate(generation_panel, '/api/selection/matching', {'date_from': 'bad'}).status_code == 400

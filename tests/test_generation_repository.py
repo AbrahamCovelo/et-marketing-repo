@@ -39,6 +39,66 @@ def destination_payload(destination, **changes):
     return {**{key: destination[key] for key in ("name", "site_url", "locale", "notes", "enabled")}, **changes}
 
 
+def test_model_is_pinned_per_preparation_without_editing_configuration(corpus):
+    _, repo, _ = corpus
+    original = repo.catalog()
+    first = repo.create_plan([1], [1, 2, 3], model_override="gpt-6-luna")
+    assert {item["model"] for item in first["items"]} == {"gpt-6-luna"}
+    assert all(item["configuration"]["model"] == "" for item in first["items"])
+    assert not any("Falta elegir un modelo" in warning for item in first["items"] for warning in item["warnings"])
+    assert repo.catalog() == original
+    duplicate = repo.create_plan([1], [1, 2, 3], model_override="gpt-6-luna")
+    assert duplicate["created_count"] == 0 and duplicate["reused_count"] == 3
+    different = repo.create_plan([1], [1], model_override="gpt-6.1-terra")
+    assert different["created_count"] == 1
+    assert repo.article_history(1)["prepared_count"] == 4
+    config = original["configurations"][0]
+    repo.save_configuration(config_payload(config, model="gpt-6-astra"), config["id"])
+    old = repo.plan_detail(first["id"])["items"][0]
+    assert old["model"] == "gpt-6-luna" and old["configuration_changed"]
+    assert repo.article_history(1)["generated_count"] == 0
+
+
+def test_upgrade_reads_legacy_models_and_reuses_legacy_preparations(corpus):
+    path, repo, _ = corpus
+    config = repo.catalog()["configurations"][0]
+    repo.save_configuration(config_payload(config, model="gpt-6-luna"), config["id"])
+    first = repo.create_plan([1], [1])
+    with Database(path) as db, db.connection:
+        db.connection.execute("ALTER TABLE generation_preparations DROP COLUMN generation_options_json")
+    upgraded = GenerationRepository(path)
+    legacy = upgraded.plan_detail(first["id"])["items"][0]
+    assert legacy["model"] == "gpt-6-luna" and legacy["provider"] == "openai"
+    again = upgraded.create_plan([1], [1], model_override="gpt-6-luna")
+    assert again["created_count"] == 0 and again["reused_count"] == 1
+    assert again["items"][0]["id"] == legacy["id"]
+
+
+def test_supplied_templates_import_preserves_history_and_ctas(corpus):
+    from src.generation.presets import load_editorial_prompts
+    from src.generation.preparation import preview_preparation
+    path, repo, _ = corpus
+    previous = repo.create_plan([1], [1, 2, 3])
+    loaded = load_editorial_prompts(path)
+    assert {item["locale"] for item in loaded} == {"en-CA", "fr-CA", "es-CO"}
+    catalog = repo.catalog()
+    assert all(p["version"] == 2 and p["status"] == "draft" for p in catalog["prompts"])
+    expected = {"en-CA": ("CTA_IMMIGRATION_EN", "CTA_TAXES_EN"), "fr-CA": ("CTA_IMMIGRATION_FR", "CTA_TAXES_FR"), "es-CO": ("CTA_INMIGRACION_ES", "CTA_IMPUESTOS_ES")}
+    for config in catalog["configurations"]:
+        prompt = repo.configuration_context(config["id"])["prompt"]
+        assert prompt["system_prompt"] and "{{article_text}}" in prompt["template"]
+        assert "{source_text}" not in prompt["template"]
+        assert all(f"[{cta}]" in prompt["template"] for cta in expected[config["locale"]])
+        assert "<h2>" in prompt["template"] and "<strong>" in prompt["template"]
+        preview = preview_preparation(path, [1], [config["id"]], "gpt-6-luna")
+        assert "Useful paragraph." in preview["example"]["rendered_prompt"]
+        assert "{{article_text}}" not in preview["example"]["rendered_prompt"]
+    assert all(item["prompt"]["template"] == "" for item in repo.plan_detail(previous["id"])["items"])
+    assert load_editorial_prompts(path) == loaded
+    assert repo.catalog() == catalog
+    assert repo.article_history(1)["generated_count"] == 0
+
+
 def test_seed_is_idempotent_empty_and_preserves_source_schema_and_corpus(corpus):
     path, repo, _ = corpus
     initial = repo.catalog()

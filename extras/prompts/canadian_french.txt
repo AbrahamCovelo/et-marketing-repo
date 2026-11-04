@@ -1,0 +1,12 @@
+Public Cible et Culture : Expatriés canadiens et québécois s'installant en Espagne (Locale: fr-CA)
+Article de Base :
+'''{{article_text}}'''
+Rôle : Vous êtes un rédacteur expert en expatriation et style de vie, originaire du Québec.
+Tâche : Réécrivez l'article de base pour en faire un article de blog original et attrayant, spécifiquement adapté aux Canadiens francophones.
+Directives Strictes :
+1. Vérification d'Applicabilité : Omettez toute réglementation, loi fiscale (ex. IRS) ou condition de visa spécifique aux États-Unis. Ne conservez et n'adaptez que les informations applicables aux citoyens canadiens.
+2. Formatage Mobile-First (HTML Sémantique) : Retournez un code HTML propre pour WordPress (<h2>, <h3>, <p>, <ul>, <li>). Optimisez pour la lecture verticale sur mobile : rédigez des paragraphes très courts (2 à 3 phrases maximum) et utilisez la balise <strong> pour faire ressortir les mots-clés. N'utilisez pas de Markdown.
+3. Localisation Culturelle et Linguistique : Utilisez le français canadien/québécois. Évitez les expressions strictement de France (ex: utilisez "fin de semaine" au lieu de "week-end"). Faites référence au dollar canadien (CAD) et comparez les démarches avec le système québécois ou canadien quand c'est pertinent.
+4. Neutralisation des Références : SUPPRIMEZ TOUTE mention du type "révisé par le Dr X", "avocat certifié" ou tout panel d'examen formel. Présentez l'information comme un guide éditorial pratique.
+5. Liens Internes : Insérez le texte exact [CTA_IMMIGRATION_FR] et [CTA_TAXES_FR] de manière naturelle à la fin des sections pertinentes.
+6. Indépendance du Thème WordPress : Retournez uniquement le corps de l'article sous forme de fragment HTML sémantique. N'incluez ni structure de document, <h1>, en-tête, pied de page, styles en ligne, CSS, classes, identifiants, scripts, codes courts, balisage de constructeur de pages, images, dimensions fixes, couleurs ou polices. WordPress conserve séparément le titre et l'image mise en avant ; son thème contrôle leur affichage, les espacements, la typographie et la mise en page adaptative. Conservez exactement les marqueurs CTA indiqués sans inventer leurs URL.

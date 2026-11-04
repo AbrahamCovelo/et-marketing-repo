@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from src.extraction.db_manager import Database
+from .model_options import generation_options, validate_model_override
 
 PLACEHOLDERS = [
     "article_text", "article_json", "article_title", "article_url",
@@ -77,7 +78,7 @@ def _warnings(source: dict, context: dict) -> list[str]:
         warnings.append("La plantilla está vacía; falta la plantilla de los socios.")
     if not prompt["system_prompt"].strip():
         warnings.append("No hay instrucciones de sistema configuradas.")
-    if not configuration.get("model"):
+    if not context["generation_options"]["model"]:
         warnings.append("Todavía no se ha seleccionado un modelo.")
     if prompt.get("current_version_id") != prompt["version_id"]:
         warnings.append("Existe una versión más reciente del prompt; se usa la versión fijada en la configuración.")
@@ -100,12 +101,14 @@ def _values(source: dict, destination: dict) -> dict[str, str]:
 
 def preview_preparation(
     db_path: str | Path, article_ids: list[int], configuration_ids: list[int],
+    model_override=None,
 ) -> dict:
     """Describe all pairs and render only the first, without saving any plan."""
     from .repository import GenerationRepository
 
     articles = _ids(article_ids, "artículos")
     configurations = _ids(configuration_ids, "configuraciones")
+    model_override = validate_model_override(model_override)
     pair_count = len(articles) * len(configurations)
     if pair_count > MAX_PAIRS:
         raise ValueError(f"La preparación admite como máximo {MAX_PAIRS} combinaciones de artículo y configuración.")
@@ -113,6 +116,7 @@ def preview_preparation(
     contexts = []
     for configuration_id in configurations:
         context = repository.configuration_context(configuration_id)
+        context["generation_options"] = generation_options(context["configuration"], model_override)
         if not context["configuration"]["enabled"]:
             raise ValueError("La configuración seleccionada está deshabilitada.")
         if not context["destination"]["enabled"]:
@@ -147,6 +151,7 @@ def preview_preparation(
                     "configuration_version_id": configuration["current_version_id"],
                     "prompt_version_id": prompt["version_id"],
                     "destination_id": destination["id"],
+                    "generation_options": context["generation_options"],
                 }
                 items.append({
                     **identifiers,

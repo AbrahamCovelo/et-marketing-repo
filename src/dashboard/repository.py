@@ -146,9 +146,8 @@ class Repository:
             result["last_run_at"] = latest[0] if latest else None
             return result
 
-    def list_articles(self, q: str = "", date_field: str = "published_at", date_from: str | None = None,
-                      date_to: str | None = None, review: str = "all", selected_only: bool = False,
-                      page: int = 1, page_size: int = 25, sort: str = "published_desc") -> dict[str, Any]:
+    def _article_query(self, q="", date_field="published_at", date_from=None,
+                       date_to=None, review="all", selected_only=False, sort="published_desc"):
         if not isinstance(q, str) or len(q) > 500:
             raise ValueError("El texto de búsqueda debe tener hasta 500 caracteres.")
         if date_field not in DATE_FIELDS:
@@ -160,8 +159,6 @@ class Repository:
             raise ValueError("El filtro de selección debe ser booleano.")
         if sort not in _SORTS:
             raise ValueError("Orden no válido.")
-        page = _positive_int(page, "La página", 1_000_000)
-        page_size = _positive_int(page_size, "El tamaño de página", 100)
         start, end = validate_date_range(date_from, date_to)
         q = q.strip()
         clauses: list[str] = []
@@ -184,6 +181,14 @@ class Repository:
         joins = """FROM source_articles a
             JOIN article_versions v ON a.current_version_id=v.id
             LEFT JOIN dashboard_selection s ON s.article_id=a.id"""
+        return joins, where, parameters
+
+    def list_articles(self, q: str = "", date_field: str = "published_at", date_from: str | None = None,
+                      date_to: str | None = None, review: str = "all", selected_only: bool = False,
+                      page: int = 1, page_size: int = 25, sort: str = "published_desc") -> dict[str, Any]:
+        page = _positive_int(page, "La página", 1_000_000)
+        page_size = _positive_int(page_size, "El tamaño de página", 100)
+        joins, where, parameters = self._article_query(q, date_field, date_from, date_to, review, selected_only, sort)
         with self._db() as db:
             total = db.connection.execute(f"SELECT COUNT(*) {joins}{where}", parameters).fetchone()[0]
             pages = max(1, math.ceil(total / page_size))
@@ -199,6 +204,22 @@ class Repository:
             "items": [_decode(row, bool_fields=("selected", "review_required")) for row in rows],
             "total": total, "page": page, "page_size": page_size, "pages": pages,
         }
+
+    def select_matching(self, **filters) -> dict[str, int]:
+        """Select all matching pages atomically using the same predicates as the list."""
+        if set(filters) - {"q", "date_field", "date_from", "date_to", "review", "selected_only", "sort"}:
+            raise ValueError("La selección por filtros contiene campos no admitidos.")
+        joins, where, parameters = self._article_query(**filters)
+        with self._db() as db, db.connection:
+            db.connection.execute("BEGIN IMMEDIATE")
+            total = db.connection.execute(f"SELECT COUNT(*) {joins}{where}", parameters).fetchone()[0]
+            if total > 5000:
+                raise ValueError("La selección admite hasta 5000 resultados. Reduzca el rango o aplique más filtros.")
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            result = db.connection.execute(f"""INSERT OR IGNORE INTO dashboard_selection(article_id,selected_at)
+                SELECT a.id, ? {joins}{where}""", [now, *parameters])
+            count = db.connection.execute("SELECT COUNT(*) FROM dashboard_selection").fetchone()[0]
+            return {"selected_count": count, "matched_count": total, "added_count": result.rowcount}
 
     def detail(self, article_id: int) -> dict[str, Any]:
         article_id = _positive_int(article_id, "El identificador del artículo", _MAX_SQLITE_ID)

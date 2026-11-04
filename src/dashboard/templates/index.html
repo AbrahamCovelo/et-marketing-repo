@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   <script src="{{ url_for('static', filename='generation.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='deployment.js') }}" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#workspace">Ir al contenido</a>
@@ -42,6 +43,7 @@
       <button type="button" id="tab-review" role="tab" aria-selected="true" aria-controls="review-panel" data-main-tab="review">Revisión de datos</button>
       <button type="button" id="tab-scraping" role="tab" aria-selected="false" aria-controls="scraping-panel" tabindex="-1" data-main-tab="scraping">Scraping</button>
       <button type="button" id="tab-generation" role="tab" aria-selected="false" aria-controls="generation-panel" tabindex="-1" data-main-tab="generation">Preparación de adaptaciones</button>
+      <button type="button" id="tab-deployment" role="tab" aria-selected="false" aria-controls="deployment-panel" tabindex="-1" data-main-tab="deployment">WordPress · Preparación</button>
     </nav>
 
     <section id="review-panel" role="tabpanel" aria-labelledby="tab-review">
@@ -65,13 +67,14 @@
       <div class="batch-bar">
         <span id="selection-label">0 seleccionados</span>
         <button id="select-page" type="button">Seleccionar página</button>
+        <button id="select-all-results" type="button" disabled>Seleccionar todos los resultados</button>
         <button id="clear-selection" type="button" disabled>Vaciar selección</button>
         <span class="batch-separator" aria-hidden="true"></span>
         <button id="refresh-selected" type="button" disabled>Actualizar seleccionados</button>
         <button id="reclean-selected" type="button" disabled>Limpiar copias locales</button>
         <button id="adapt-selected" type="button" class="primary" disabled>Adaptar seleccionados…</button>
       </div>
-      <p class="muted selection-hint">La selección se conserva entre sesiones para trabajar por lotes. Actualizar descarga el artículo; limpiar utiliza su respaldo local.</p>
+      <p class="muted selection-hint">«Todos los resultados» incluye todas las páginas de los filtros aplicados y añade esos artículos a la selección. Para seleccionar la base completa, limpie los filtros. La selección se conserva entre sesiones.</p>
 
       <div class="review-grid">
         <section class="article-list-panel" aria-label="Lista de artículos">
@@ -154,7 +157,7 @@
       <section class="card preparation-banner">
         <div class="section-title"><h2>Preparar la adaptación de artículos</h2><span class="badge">Modo preparación · Sin llamadas a API</span></div>
         <p>Defina destinos, guarde versiones de los prompts y combine ambos en configuraciones. Después seleccione artículos en Revisión de datos y pulse «Adaptar seleccionados».</p>
-        <p class="muted">Las plantillas y los modelos están pendientes de definición. Guardar una preparación conserva las versiones elegidas; todavía no crea un artículo adaptado.</p>
+        <p class="muted">Revise las plantillas y el modelo antes de iniciar las pruebas. Guardar una preparación conserva las versiones elegidas; todavía no crea un artículo adaptado.</p>
         <p id="generation-credentials" class="muted hint" role="status">Consultando configuración local…</p>
         <button type="button" disabled aria-describedby="generation-disabled-help">Generar adaptaciones</button>
         <p id="generation-disabled-help" class="muted hint">Generación deshabilitada en esta fase. Ninguna acción de esta sección envía contenido a una API.</p>
@@ -180,7 +183,7 @@
               <label>Destino<select id="configuration-destination" required></select></label>
               <label>Versión del prompt<select id="configuration-prompt" required></select></label>
               <label>Proveedor previsto<select id="configuration-provider"><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select></label>
-              <label>Modelo previsto (opcional)<input id="configuration-model" maxlength="200" placeholder="Por definir" autocomplete="off"></label>
+              <label>Modelo previsto (opcional)<input id="configuration-model" list="gpt-model-options" maxlength="200" placeholder="Por definir" autocomplete="off"></label>
             </div>
             <label>Notas<textarea id="configuration-notes" rows="3" maxlength="10000"></textarea></label>
             <label class="check-label"><input id="configuration-enabled" type="checkbox" checked>Disponible para preparar artículos</label>
@@ -198,7 +201,7 @@
 
       <section id="generation-prompts" role="tabpanel" aria-labelledby="generation-tab-prompts" class="card generation-editor" hidden>
         <h2>Prompts y versiones</h2>
-        <p class="muted">Los borradores iniciales están vacíos, a la espera de las plantillas de sus socios. Guardar cambios conserva la versión anterior.</p>
+        <p class="muted">Cargue o edite las instrucciones de cada destino. Los borradores permiten preparar pruebas; guardar cambios conserva la versión anterior.</p>
         <label>Prompt a editar<select id="prompt-picker"><option value="">Nuevo prompt</option></select></label>
         <p id="prompt-version" class="muted hint"></p>
         <form id="prompt-form">
@@ -242,6 +245,71 @@
         <div id="preparation-list" class="history-list" aria-live="polite"></div>
       </section>
     </section>
+    <section id="deployment-panel" role="tabpanel" aria-labelledby="tab-deployment" hidden>
+      <section class="card preparation-banner">
+        <div class="section-title"><h2>Preparar el envío a WordPress</h2><span class="badge">Solo configuración local</span></div>
+        <p>Guarde las rutas temporales, las categorías y los enlaces de cada destino. Después podrá revisar la estructura de un futuro borrador antes de conectar el envío.</p>
+        <p class="muted">Esta sección no crea artículos, no sube imágenes y no consulta las credenciales contra WordPress. El envío permanece deshabilitado.</p>
+      </section>
+      <div id="deployment-error" class="notice error" role="alert" hidden></div>
+      <div id="deployment-notice" class="notice success" role="status" hidden></div>
+      <section class="card deployment-editor">
+        <div class="section-title"><h2>Destino y enlaces</h2><button id="deployment-refresh" type="button">Actualizar configuración local</button></div>
+        <label class="deployment-picker-label">Destino de WordPress<select id="deployment-picker" disabled><option value="">Cargando destinos…</option></select></label>
+        <dl class="deployment-metadata">
+          <div><dt>Sitio de WordPress</dt><dd id="deployment-base-url">—</dd></div>
+          <div><dt>Idioma del artículo</dt><dd id="deployment-locale">—</dd></div>
+          <div><dt>Credenciales locales</dt><dd id="deployment-credentials">—</dd></div>
+          <div><dt>Último guardado local</dt><dd id="deployment-updated">—</dd></div>
+        </dl>
+        <div id="deployment-blockers" class="preparation-warnings" role="status" hidden></div>
+        <form id="deployment-target-form">
+          <fieldset id="deployment-target-controls" disabled>
+            <label>URL de la sección de guías (opcional)<input id="deployment-guide-url" type="url" maxlength="2000" placeholder="https://…" autocomplete="off"></label>
+            <p class="muted hint">Puede cambiar esta ruta mientras se termina el sitio. Guardar una URL no crea una página ni hace que los artículos aparezcan allí automáticamente.</p>
+            <div class="form-grid">
+              <label>Categorías de WordPress (IDs, separados por comas)<input id="deployment-categories" maxlength="1000" inputmode="numeric" placeholder="Por definir; por ejemplo: 12, 34" autocomplete="off"></label>
+              <label>Configuración del idioma<select id="deployment-language-mode"><option value="site_default">Usar el idioma principal del sitio</option><option value="pending">Pendiente de configurar</option></select></label>
+            </div>
+            <p id="deployment-language-help" class="muted hint"></p>
+            <h3>Enlaces de las llamadas a la acción</h3>
+            <p class="muted hint">Las etiquetas del prompt se sustituirán por estos enlaces. Si una etiqueta aparece en el contenido y no tiene URL y texto, la validación avisará de lo pendiente.</p>
+            <div id="deployment-cta-fields" class="deployment-cta-fields"></div>
+            <label>Notas del destino<textarea id="deployment-notes" rows="3" maxlength="4000"></textarea></label>
+            <div class="actions"><button type="submit" class="primary">Guardar configuración de WordPress</button><span id="deployment-dirty" class="muted hint" hidden>Hay cambios sin guardar.</span></div>
+          </fieldset>
+        </form>
+      </section>
+      <section class="card deployment-image-note">
+        <h2>Imagen destacada y apariencia del artículo</h2>
+        <p>La imagen de portada debe existir en la biblioteca de medios de WordPress o subirse más adelante. Se asignará a cada artículo mediante su ID de imagen destacada. WordPress puede crear tamaños derivados del archivo, pero no crea la fotografía original.</p>
+        <p>La misma imagen destacada puede aparecer en la tarjeta y al abrir el artículo, siempre que ambas plantillas estén configuradas para mostrarla. Los colores, las fuentes, los espacios y el tamaño de la imagen los controla el tema.</p>
+        <p class="muted">El cuerpo utilizará HTML semántico, sin estilos propios ni imágenes incrustadas de portada. El título y la imagen destacada se guardan por separado. Cambiar de tema podrá cambiar su aspecto; habrá que comprobar que el nuevo tema muestre estos elementos.</p>
+      </section>
+      <details class="card deployment-preview-card">
+        <summary>Validar la estructura de un futuro borrador</summary>
+        <p class="muted">Pegue un contenido de prueba cuando lo tenga. Esta revisión es local y no guarda ni envía el artículo a WordPress. Utiliza la configuración guardada del destino seleccionado.</p>
+        <form id="deployment-preview-form">
+          <fieldset id="deployment-preview-controls" disabled>
+            <label>Título del artículo<input id="deployment-preview-title" required maxlength="300" autocomplete="off"></label>
+            <label>HTML del cuerpo<textarea id="deployment-preview-html" class="code-input" rows="10" required maxlength="300000" spellcheck="false" placeholder="Pegue aquí el HTML semántico del artículo"></textarea></label>
+            <div class="form-grid">
+              <label>Extracto (opcional)<textarea id="deployment-preview-excerpt" rows="3" maxlength="4000"></textarea></label>
+              <label>ID de la imagen destacada en este WordPress<input id="deployment-featured-media" type="number" min="1" max="2147483647" step="1" placeholder="Por definir"></label>
+            </div>
+            <p class="muted hint">El ID corresponde a una imagen ya existente en el WordPress de este destino. Esta validación local comprueba el formato, pero no verifica que la imagen exista ni que pueda utilizarse.</p>
+            <div class="actions"><button id="deployment-preview-submit" type="submit">Validar y ver borrador local</button><button id="deployment-send" type="button" disabled aria-describedby="deployment-send-help">Enviar a WordPress · Deshabilitado</button></div>
+            <p id="deployment-send-help" class="muted hint">El envío se habilitará en una fase posterior. Una validación local correcta no confirma la conexión, los permisos ni la apariencia final del sitio.</p>
+          </fieldset>
+        </form>
+        <section id="deployment-preview-result" class="preparation-preview" aria-live="polite" hidden>
+          <h3 id="deployment-preview-status"></h3>
+          <div id="deployment-preview-errors" class="notice error" hidden></div>
+          <div id="deployment-preview-warnings" class="preparation-warnings" hidden></div>
+          <details id="deployment-payload-wrap" hidden><summary>Datos que formarán el borrador</summary><pre id="deployment-preview-payload" class="small-pre"></pre></details>
+        </section>
+      </details>
+    </section>
   </main>
   <dialog id="adapt-dialog" aria-labelledby="adapt-dialog-title" aria-describedby="adapt-dialog-description">
     <div class="section-title"><h2 id="adapt-dialog-title">Adaptar artículos · Preparación</h2><button id="close-adapt-dialog" type="button" aria-label="Cerrar preparación">Cerrar</button></div>
@@ -250,6 +318,13 @@
     <div id="adapt-error" class="notice error" role="alert" hidden></div>
     <div id="adapt-notice" class="notice success" role="status" hidden></div>
     <fieldset class="configuration-choices"><legend>Configuraciones disponibles</legend><div id="adapt-configurations"></div></fieldset>
+    <fieldset id="adapt-model-controls">
+      <legend>Modelo para esta preparación</legend>
+      <label>Modelo GPT<select id="adapt-model"><option value="">Usar el modelo de cada configuración</option></select></label>
+      <label id="adapt-custom-model-wrap" hidden>Identificador del modelo<input id="adapt-custom-model" maxlength="200" placeholder="gpt-…" autocomplete="off" spellcheck="false"></label>
+      <p class="muted hint">El modelo elegido aquí se conserva en el lote y no modifica las configuraciones. Solo se aplica a configuraciones OpenAI. Puede dejar el modelo pendiente.</p>
+      <p id="adapt-model-reference" class="muted hint"></p>
+    </fieldset>
     <p id="adapt-pair-count" role="status" aria-live="polite"></p>
     <p class="muted hint">Máximo 500 combinaciones por preparación. Al guardar se fijan las versiones vigentes en ese momento. Si cambió un artículo o una configuración en otra pestaña, vuelva a previsualizar antes de guardar. Los borradores pueden guardarse para revisión; conservar una preparación no la convierte en adaptación.</p>
     <div class="actions"><button id="preview-preparation" type="button">Previsualizar preparación</button><button id="save-preparation" type="button" class="primary">Guardar preparación</button><button type="button" disabled>Generar · Deshabilitado</button></div>
@@ -261,6 +336,7 @@
       <details><summary>Datos del artículo que recibirá la plantilla</summary><pre id="preview-source" class="small-pre"></pre></details>
     </section>
   </dialog>
+  <datalist id="gpt-model-options"></datalist>
   <footer>Las fechas del sitio original y las de extracción de cada versión se muestran por separado. Los avisos de revisión no equivalen a errores de descarga.</footer>
 </body>
 </html>

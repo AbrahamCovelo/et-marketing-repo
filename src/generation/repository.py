@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from src.extraction.db_manager import Database
 from .preparation import PLACEHOLDERS, render_template
+from .model_options import generation_options, validate_model_override
 
 
 _MAX_ID = 2**63 - 1
@@ -150,6 +151,10 @@ class GenerationRepository:
             connection.execute("BEGIN IMMEDIATE")
             for statement in _SCHEMA:
                 connection.execute(statement)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(generation_preparations)")}
+            if "generation_options_json" not in columns:
+                connection.execute("""ALTER TABLE generation_preparations ADD COLUMN
+                    generation_options_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(generation_options_json))""")
             if not connection.execute("SELECT 1 FROM generation_schema WHERE version=1").fetchone():
                 self._seed(connection)
                 connection.execute("INSERT INTO generation_schema(version,seeded_at) VALUES (1,?)", (_now(),))
@@ -369,9 +374,10 @@ class GenerationRepository:
     def _destination_identity(destination: dict) -> dict:
         return {key: value for key, value in destination.items() if key not in {"created_at", "updated_at"}}
 
-    def create_plan(self, article_ids: list[int], configuration_ids: list[int]) -> dict:
+    def create_plan(self, article_ids: list[int], configuration_ids: list[int], model_override=None) -> dict:
         articles = _ids(article_ids, "Los artículos")
         configurations = _ids(configuration_ids, "Las configuraciones")
+        model_override = validate_model_override(model_override)
         if len(articles) * len(configurations) > 500:
             raise ValueError("Cada preparación permite como máximo 500 combinaciones de artículo y configuración.")
         with Database(self.db_path) as db, db.connection:
@@ -382,30 +388,38 @@ class GenerationRepository:
             for context in contexts:
                 if not context["configuration"]["enabled"] or not context["destination"]["enabled"] or context["prompt"]["archived"]:
                     raise ValueError("No se puede preparar una configuración o destino desactivado, ni un prompt archivado.")
+                context["generation_options"] = generation_options(context["configuration"], model_override)
             now = _now()
             plan_id = connection.execute("INSERT INTO generation_plans(status,created_at) VALUES ('prepared',?)", (now,)).lastrowid
             for source in sources:
                 for context in contexts:
                     configuration, destination, prompt = (context[key] for key in ("configuration", "destination", "prompt"))
-                    fingerprint = hashlib.sha256(_json({"source_version_id": source["version_id"],
+                    options = context["generation_options"]
+                    identity = {"source_version_id": source["version_id"],
                         "configuration_version_id": configuration["current_version_id"],
-                        "destination": self._destination_identity(destination)}).encode("utf-8")).hexdigest()
+                        "destination": self._destination_identity(destination)}
+                    # Preserve legacy fingerprints when using the saved model.
+                    if options["model"] != configuration["model"]:
+                        identity["generation_options"] = options
+                    fingerprint = hashlib.sha256(_json(identity).encode("utf-8")).hexdigest()
                     previous = connection.execute("SELECT id FROM generation_preparations WHERE fingerprint=? AND status='prepared'",
                                                   (fingerprint,)).fetchone()
                     if previous:
                         preparation_id = previous["id"]
                     else:
                         warnings = list(configuration["warnings"])
+                        if options["model"]:
+                            warnings = [warning for warning in warnings if warning != "Falta elegir un modelo."]
                         if source["review_required"]:
                             warnings.append("La extracción de origen tiene avisos que requieren revisión.")
                         preparation_id = connection.execute("""INSERT INTO generation_preparations
                             (article_id,source_version_id,configuration_id,configuration_version_id,prompt_version_id,
                              destination_id,fingerprint,status,source_snapshot_json,configuration_snapshot_json,
-                             destination_snapshot_json,prompt_snapshot_json,warnings_json,created_at)
-                             VALUES (?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?)""", (
+                             destination_snapshot_json,prompt_snapshot_json,warnings_json,created_at,generation_options_json)
+                             VALUES (?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?)""", (
                                 source["id"], source["version_id"], configuration["id"], configuration["current_version_id"],
                                 prompt["version_id"], destination["id"], fingerprint, _json(source),
-                                _json(configuration), _json(destination), _json(prompt), _json(warnings), now)).lastrowid
+                                _json(configuration), _json(destination), _json(prompt), _json(warnings), now, _json(options))).lastrowid
                     connection.execute("INSERT INTO generation_plan_items(plan_id,preparation_id,reused) VALUES (?,?,?)",
                                        (plan_id, preparation_id, bool(previous)))
             return self._plan_detail(connection, plan_id)
@@ -416,6 +430,8 @@ class GenerationRepository:
             item[key] = json.loads(item.pop(f"{key}_snapshot_json"))
             item[f"{key}_snapshot"] = item[key]
         item["warnings"] = json.loads(item.pop("warnings_json"))
+        item["generation_options"] = json.loads(item.pop("generation_options_json")) or generation_options(item["configuration"])
+        item.update(provider=item["generation_options"]["provider"], model=item["generation_options"]["model"])
         article = connection.execute("SELECT current_version_id FROM source_articles WHERE id=?", (item["article_id"],)).fetchone()
         config = connection.execute("SELECT current_version_id FROM generation_configurations WHERE id=?", (item["configuration_id"],)).fetchone()
         destination = self._destination(connection, item["destination_id"])
@@ -494,10 +510,83 @@ class GenerationRepository:
                 item["plan_ids"] = [row["id"] for row in plans]
                 active = [row["id"] for row in plans if row["status"] == "prepared"]
                 item["plan_id"] = (active or item["plan_ids"])[-1]
-            return {"article_id": article_id, "generated_count": 0,
+            trials = self._trial_rows(db.connection, [article_id])
+            completed = sum(item["status"] == "completed" for item in trials)
+            return {"article_id": article_id, "generated_count": completed,
                     "prepared_count": sum(item["status"] == "prepared" for item in items),
-                    "adaptation_status": "not_adapted", "items": items,
-                    "message": "Todavía no hubo adaptaciones."}
+                    "adaptation_status": "adapted" if completed else "not_adapted",
+                    "items": items, "trials": trials,
+                    "message": (f"{completed} adaptación(es) generada(s), pendientes de revisión editorial."
+                                if completed else "Todavía no hubo adaptaciones.")}
+
+    @staticmethod
+    def _trial_rows(connection, article_ids: list[int], *, trial_id=None, include_html=False) -> list[dict]:
+        """Read trial metadata without exposing provider requests or raw responses."""
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_trials'").fetchone():
+            return []
+        if trial_id is None and not article_ids:
+            return []
+        condition = "t.id=?" if trial_id is not None else f"t.article_id IN ({','.join('?' for _ in article_ids)})"
+        parameters = [trial_id] if trial_id is not None else article_ids
+        fields = ",t.html" if include_html else ""
+        rows = connection.execute(f"""SELECT t.id,t.article_id,t.source_version_id,t.configuration_id,
+            t.configuration_version_id,t.prompt_version_id,t.destination_id,t.model,t.status,
+            t.created_at,t.completed_at,t.usage_json,c.name AS configuration_name,
+            c.version AS configuration_version,d.name AS destination_name,d.locale{fields}
+            FROM generation_trials t
+            JOIN generation_configuration_versions c ON c.id=t.configuration_version_id
+            JOIN generation_destinations d ON d.id=t.destination_id
+            WHERE {condition} ORDER BY t.id DESC""", parameters)
+        result = []
+        for row in rows:
+            item = dict(row)
+            raw_usage = json.loads(item.pop("usage_json") or "{}")
+            item["usage"] = {key: raw_usage[key] for key in ("input_tokens", "output_tokens", "total_tokens")
+                             if isinstance(raw_usage, dict) and type(raw_usage.get(key)) is int}
+            item["review_status"] = "pending" if item["status"] == "completed" else "not_ready"
+            result.append(item)
+        deployments = GenerationRepository._deployment_rows(connection, [item["id"] for item in result])
+        for item in result:
+            item["deployment"] = deployments.get(item["id"])
+        return result
+
+    @staticmethod
+    def _deployment_rows(connection, trial_ids: list[int]) -> dict:
+        """Expose remote draft state, constructing editor links only from fixed sites."""
+        from src.deployment.settings import CONNECTIONS
+
+        if not trial_ids:
+            return {}
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('deployment_trials','deployment_targets')")}
+        if tables != {"deployment_trials", "deployment_targets"}:
+            return {}
+        placeholders = ",".join("?" for _ in trial_ids)
+        rows = connection.execute(f"""SELECT p.generation_trial_id,p.status,p.updated_at,p.result_json,
+            target.connection_key FROM deployment_trials p
+            JOIN generation_trials generation ON generation.id=p.generation_trial_id
+            JOIN deployment_targets target ON target.id=p.target_id AND target.destination_id=generation.destination_id
+            WHERE p.generation_trial_id IN ({placeholders})""", trial_ids)
+        result = {}
+        for row in rows:
+            item = {"status": row["status"], "updated_at": row["updated_at"], "post_id": None, "editor_url": None}
+            response = json.loads(row["result_json"] or "{}")
+            post_id = response.get("post_id") if isinstance(response, dict) else None
+            connection_info = CONNECTIONS.get(row["connection_key"])
+            if (row["status"] == "draft" and type(post_id) is int and 0 < post_id <= _MAX_ID
+                    and response.get("post_status") == "draft" and connection_info):
+                item["post_id"] = post_id
+                item["editor_url"] = f"{connection_info[1]}/wp-admin/post.php?post={post_id}&action=edit"
+            result[row["generation_trial_id"]] = item
+        return result
+
+    def trial_detail(self, trial_id: int) -> dict:
+        _id(trial_id, "La prueba")
+        with Database(self.db_path) as db:
+            rows = self._trial_rows(db.connection, [], trial_id=trial_id, include_html=True)
+            if not rows:
+                raise KeyError(trial_id)
+            return rows[0]
 
     def article_summaries(self, article_ids: list[int]) -> dict[int, dict]:
         ids = _ids(article_ids, "Los artículos", allow_empty=True)
@@ -513,6 +602,16 @@ class GenerationRepository:
                 summary["prepared_count"] += 1
                 config = json.loads(row["configuration_snapshot_json"])
                 reference = {"id": row["configuration_id"], "name": config["name"], "version": config["current_version"]}
+                if reference not in summary["configurations"]:
+                    summary["configurations"].append(reference)
+            for trial in self._trial_rows(db.connection, ids):
+                if trial["status"] != "completed":
+                    continue
+                summary = summaries[trial["article_id"]]
+                summary["generated_count"] += 1
+                summary["adaptation_status"] = "adapted"
+                reference = {"id": trial["configuration_id"], "name": trial["configuration_name"],
+                             "version": trial["configuration_version"]}
                 if reference not in summary["configurations"]:
                     summary["configurations"].append(reference)
         return summaries

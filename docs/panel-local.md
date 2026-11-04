@@ -45,9 +45,15 @@ La lista y el detalle distinguen las preparaciones guardadas de las adaptaciones
 
 La sección contiene cuatro vistas: Configuraciones, Prompts, Destinos y Preparaciones guardadas. Los destinos iniciales representan dos sitios y tres variantes: Canadians In Spain en inglés y francés, y Colombians in Spain en español. Se pueden editar sus URLs e idiomas o añadir otros destinos.
 
-Los tres prompts iniciales están vacíos y en estado Borrador, pendientes de las plantillas de los socios. Las configuraciones iniciales no tienen modelo elegido. Puede guardar borradores, crear prompts y conservar sus versiones; para marcar uno como Revisado hacen falta instrucciones de sistema, plantilla y una variable que incluya el texto o JSON del artículo. Esa marca expresa revisión editorial y no activa generación.
+Los tres prompts suministrados el 4 de noviembre de 2026 están cargados en la base de trabajo y en estado Borrador, pendientes de pruebas. Conservan las instrucciones de HTML, localización y etiquetas CTA. Puede guardar borradores, crear prompts y conservar sus versiones; para marcar uno como Revisado hacen falta instrucciones de sistema, plantilla y una variable que incluya el texto o JSON del artículo. Esa marca expresa revisión editorial y no activa generación.
 
 Cada configuración combina un destino con una versión concreta de un prompt, un proveedor y un modelo. Si cambia un prompt, las configuraciones existentes conservan su versión anterior y muestran el aviso correspondiente. Para usar la nueva versión debe seleccionarla y guardar la configuración. Los proveedores y modelos son datos locales, sin consulta ni validación contra una API.
+
+«Seleccionar todos los resultados» añade los artículos de todas las páginas que cumplen los filtros aplicados, hasta 5000 resultados por acción. Para seleccionar toda la base, limpie primero los filtros. La preparación mantiene su límite de 500 combinaciones: los 107 artículos actuales con tres destinos suman 321.
+
+El diálogo de preparación permite usar el modelo de cada configuración o elegir un GPT para todo el lote, con una opción manual. El modelo queda guardado en cada preparación y visible en el historial. Esta elección no edita las configuraciones generales; una combinación con otro modelo se registra por separado. Un modelo GPT común no se aplica a configuraciones Gemini.
+
+La sección «WordPress · Preparación» añade los ajustes de rutas, categorías y CTA del destino. Muestra únicamente si las credenciales privadas están configuradas. Su vista previa comprueba título, HTML semántico, extracto e ID de una imagen destacada existente; no confirma ese ID contra el sitio ni guarda o envía un artículo. Consulte [Preparación de WordPress](preparacion-wordpress.md).
 
 Para preparar artículos:
 
@@ -59,7 +65,9 @@ Para preparar artículos:
 
 Guardar dos veces las mismas combinaciones reutiliza las preparaciones activas, sin duplicarlas. Si dos lotes comparten una preparación, cancelar uno mantiene la preparación disponible para el otro. Un cambio del artículo, de la configuración o del destino permite guardar una preparación nueva; el historial conserva la anterior y señala qué cambió. Una revisión nueva del prompt por sí sola no sustituye la versión fijada en la configuración.
 
-**Guardar una preparación no genera una adaptación.** El historial muestra «Todavía no hubo adaptaciones.» y separa el número de preparaciones. Los botones de generación están deshabilitados y el servidor rechaza su ejecución incluso con una clave configurada. Ninguna preparación se ejecutará automáticamente al habilitar una fase futura.
+**Guardar una preparación no genera una adaptación.** El historial separa preparaciones y resultados reales de pruebas individuales. En el artículo de Barcelona, la pestaña Adaptaciones muestra la prueba para Colombia, su modelo, consumo y un desplegable con el HTML guardado como texto seguro. Solo las respuestas completas cuentan como adaptaciones; siguen pendientes de revisión editorial. Los botones de generación masiva están deshabilitados y ninguna preparación se ejecutará automáticamente.
+
+Cuando una prueba se envía explícitamente mediante el servicio individual, ese historial también muestra su estado en WordPress. Para Barcelona permite abrir el borrador 1546 en el editor del sitio colombiano, con la imagen 1369. El enlace requiere iniciar sesión en WordPress y no publica la entrada; el texto y los CTA siguen pendientes de revisión.
 
 La configuración privada usa `.env`, ignorado por Git, con [.env.example](../.env.example) como referencia sin secretos. `extras/EntreTramites.txt` también se ignora. El panel muestra únicamente la presencia de una credencial; no la expone ni comprueba su validez. Consulte [Preparación de generación](preparacion-generacion.md) para el contrato de las plantillas y la persistencia.
 

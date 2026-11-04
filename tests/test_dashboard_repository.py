@@ -53,6 +53,25 @@ def test_search_is_case_and_accent_insensitive_literal_and_injection_safe(corpus
     assert repo.summary()["articles"] == 3
 
 
+def test_select_matching_includes_all_pages_preserves_other_selection_and_versions(corpus):
+    path, repo, _ = corpus
+    with Database(path) as db:
+        for i in range(31):
+            db.store_article(article(f"batch-{i}", f"Batch article {i}", "Matching text", review=True), raw_html="<main>Batch fixture</main>")
+        before = db.stats()
+    repo.set_selection([2], True)
+    filters = dict(q="Batch", review="needs_review", date_from="2026-03-10", date_to="2026-03-10")
+    assert len(repo.list_articles(**filters)['items']) == 25
+    assert repo.list_articles(**filters)['total'] == 31
+    assert repo.select_matching(**filters) == {'matched_count': 31, 'selected_count': 32, 'added_count': 31}
+    assert repo.select_matching(**filters)['added_count'] == 0
+    assert 2 in repo.selected_ids() and 1 not in repo.selected_ids()
+    assert repo.select_matching(q="not-found")['matched_count'] == 0
+    assert repo.select_matching()['selected_count'] == 34
+    with Database(path) as db:
+        assert db.stats() == before
+
+
 def test_publication_filters_use_source_calendar_date_and_exclude_missing(corpus):
     _, repo, _ = corpus
     result = repo.list_articles(date_from="2026-03-11", date_to="2026-03-11")
