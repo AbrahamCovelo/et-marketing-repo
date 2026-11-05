@@ -511,13 +511,15 @@ class GenerationRepository:
                 active = [row["id"] for row in plans if row["status"] == "prepared"]
                 item["plan_id"] = (active or item["plan_ids"])[-1]
             trials = self._trial_rows(db.connection, [article_id])
-            completed = sum(item["status"] == "completed" for item in trials)
+            completed = sum(item["status"] == "completed" and not item.get("deleted_at") for item in trials)
+            deleted_count = sum(bool(item.get("deleted_at")) for item in trials)
             return {"article_id": article_id, "generated_count": completed,
                     "prepared_count": sum(item["status"] == "prepared" for item in items),
                     "adaptation_status": "adapted" if completed else "not_adapted",
-                    "items": items, "trials": trials,
+                    "items": items, "trials": trials, "deleted_count": deleted_count,
                     "message": (f"{completed} adaptación(es) generada(s), pendientes de revisión editorial."
-                                if completed else "Todavía no hubo adaptaciones.")}
+                                if completed else "No hay adaptaciones activas; se conserva el registro de las eliminadas."
+                                if deleted_count else "Todavía no hubo adaptaciones.")}
 
     @staticmethod
     def _trial_rows(connection, article_ids: list[int], *, trial_id=None, include_html=False) -> list[dict]:
@@ -546,8 +548,16 @@ class GenerationRepository:
             item["review_status"] = "pending" if item["status"] == "completed" else "not_ready"
             result.append(item)
         deployments = GenerationRepository._deployment_rows(connection, [item["id"] for item in result])
+        deleted = {}
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone():
+            deleted = dict(connection.execute('SELECT trial_id,deleted_at FROM adaptation_deletions'))
         for item in result:
             item["deployment"] = deployments.get(item["id"])
+            item["deleted_at"] = deleted.get(item["id"])
+            if item["deleted_at"]:
+                item["review_status"] = "deleted"
+                if include_html:
+                    item["html"] = ""
         return result
 
     @staticmethod
@@ -578,6 +588,24 @@ class GenerationRepository:
                 item["post_id"] = post_id
                 item["editor_url"] = f"{connection_info[1]}/wp-admin/post.php?post={post_id}&action=edit"
             result[row["generation_trial_id"]] = item
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_actions'").fetchone():
+            actions = connection.execute(f"""SELECT a.*,target.connection_key FROM adaptation_actions a
+                JOIN deployment_trials p ON p.generation_trial_id=a.trial_id
+                JOIN generation_trials g ON g.id=a.trial_id
+                JOIN deployment_targets target ON target.id=p.target_id AND target.destination_id=g.destination_id
+                WHERE a.trial_id IN ({placeholders}) ORDER BY a.id""", trial_ids)
+            for action in actions:
+                response = json.loads(action['result_json'])
+                post_id = response.get('post_id')
+                connection_info = CONNECTIONS.get(action['connection_key'])
+                item = {**result.get(action['trial_id'], {'post_id': None, 'editor_url': None}),
+                        'status': action['status'], 'updated_at': action['updated_at'],
+                        'action_id': action['id'], 'error': action['error']}
+                if (action['status'] == 'completed' and type(post_id) is int and 0 < post_id <= _MAX_ID and connection_info
+                        and response.get('post_status') in ('draft', 'publish', 'private', 'pending', 'future')):
+                    item.update(status=response.get('post_status', 'unknown'), post_id=post_id,
+                                editor_url=f"{connection_info[1]}/wp-admin/post.php?post={post_id}&action=edit")
+                result[action['trial_id']] = item
         return result
 
     def trial_detail(self, trial_id: int) -> dict:
@@ -605,7 +633,7 @@ class GenerationRepository:
                 if reference not in summary["configurations"]:
                     summary["configurations"].append(reference)
             for trial in self._trial_rows(db.connection, ids):
-                if trial["status"] != "completed":
+                if trial["status"] != "completed" or trial.get("deleted_at"):
                     continue
                 summary = summaries[trial["article_id"]]
                 summary["generated_count"] += 1

@@ -97,6 +97,8 @@
   function deploymentLabel(deployment) {
     const labels = {
       draft: "Borrador guardado en WordPress", sending: "Envío en curso",
+      running: "Envío en curso", publish: "Entrada publicada", future: "Entrada programada",
+      private: "Entrada privada", pending: "Entrada pendiente de revisión",
       failed: "Envío fallido", unknown: "Resultado del envío incierto",
     };
     return deployment ? (labels[deployment.status] || "Estado de envío no disponible") : "Sin envío a WordPress";
@@ -405,7 +407,7 @@
           };
           value += "\n\nPRUEBAS DE ADAPTACIÓN\n\n" + trials.map((trial) => [
             `Prueba #${trial.id} · ${trial.configuration_name} · ${trial.destination_name}`,
-            `Estado: ${trialLabels[trial.status] || trial.status}`,
+            `Estado: ${trial.deleted_at ? "Contenido eliminado de la base local" : trialLabels[trial.status] || trial.status}`,
             `Modelo: ${trial.model} · ${capturedDate(trial.created_at)}`,
             `Configuración v${trial.configuration_version} · Versión de origen #${trial.source_version_id}`,
             `Tokens de entrada: ${trial.usage?.input_tokens ?? "—"} · salida: ${trial.usage?.output_tokens ?? "—"}`,
@@ -450,16 +452,40 @@
     const container = node("div");
     container.id = "trial-results";
     for (const trial of trials) {
-      const editorUrl = trial.deployment?.status === "draft" && safeWordPressEditorUrl(trial.deployment.editor_url);
+      container.append(node("h3", `Adaptación #${trial.id} · ${trial.destination_name}`));
+      const editorUrl = safeWordPressEditorUrl(trial.deployment?.editor_url);
       if (editorUrl) {
         const paragraph = node("p");
-        const link = node("a", `Abrir borrador de la prueba #${trial.id} en WordPress`);
+        const link = node("a", `Abrir entrada de la prueba #${trial.id} en WordPress`);
         link.href = editorUrl;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
         paragraph.append(link);
         container.append(paragraph);
       }
+      if (trial.deleted_at) {
+        container.append(node("p", `Contenido local eliminado el ${capturedDate(trial.deleted_at)}. Se conserva el registro del intento; WordPress no se modificó.`));
+        continue;
+      }
+      const controls = node("div", undefined, "adaptation-actions");
+      const blocked = ["running", "unknown"].includes(trial.status) || ["running", "sending", "unknown"].includes(trial.deployment?.status);
+      const resend = node("button", "Volver a desplegar");
+      resend.type = "button";
+      resend.dataset.adaptationAction = "redeploy";
+      resend.dataset.unavailable = String(blocked || trial.status !== "completed" || !trial.deployment?.post_id);
+      resend.disabled = adaptationBusy || resend.dataset.unavailable === "true";
+      resend.addEventListener("click", () => prepareRedeployment(trial));
+      const remove = node("button", "Borrar de la base local", "danger-button");
+      remove.type = "button";
+      remove.dataset.adaptationAction = "delete";
+      remove.dataset.unavailable = String(blocked);
+      remove.disabled = adaptationBusy || blocked;
+      remove.addEventListener("click", () => deleteAdaptation(trial));
+      controls.append(resend, remove);
+      container.append(controls);
+      if (blocked) container.append(node("p", "Hay una operación en curso o incierta. Compruebe su resultado antes de volver a actuar."));
+      else if (!trial.deployment?.post_id) container.append(node("p", "El reenvío necesita un primer despliegue con título, imagen y entrada identificados."));
+      if (trial.deployment?.error) container.append(node("p", trial.deployment.error));
       const details = node("details");
       details.append(node("summary", `Revisar HTML de la prueba #${trial.id} · ${trial.model}`));
       const content = node("pre", "Abra este detalle para cargar el resultado guardado.", "article-text");
@@ -481,6 +507,101 @@
       container.append(details);
     }
     $("detail-reading").append(container);
+  }
+
+  let adaptationBusy = false;
+
+  function setAdaptationBusy(value) {
+    adaptationBusy = value;
+    document.querySelectorAll("[data-adaptation-action]").forEach((button) => {
+      button.disabled = value || button.dataset.unavailable === "true";
+    });
+  }
+
+  async function deleteAdaptation(trial) {
+    if (adaptationBusy) return;
+    if (!window.confirm(`¿Borrar el contenido de la adaptación #${trial.id} de la base local?\n\nSe eliminarán el HTML y sus copias guardadas en la base. Esta acción no se puede deshacer desde el panel. Se conservarán IDs, consumo e historial mínimo.\n\nWordPress, el artículo original y los archivos exportados no cambiarán.`)) return;
+    setAdaptationBusy(true);
+    clearError();
+    try {
+      await api(`/api/generation/trials/${trial.id}`, { method: "DELETE", body: JSON.stringify({ confirm: true }) });
+      notice("Contenido de la adaptación borrado de la base local. WordPress permanece intacto.");
+    } catch (error) { showError(error.message); }
+    finally {
+      await window.ETPanel.refreshArticles();
+      setAdaptationBusy(false);
+    }
+  }
+
+  async function prepareRedeployment(trial) {
+    if (adaptationBusy) return;
+    setAdaptationBusy(true);
+    clearError();
+    notice("Comprobando la entrada, imagen y categorías en WordPress…");
+    let preview;
+    try {
+      preview = await api(`/api/generation/trials/${trial.id}/redeploy-preview`, { method: "POST", body: "{}" });
+    } catch (error) { showError(error.message); }
+    finally { setAdaptationBusy(false); }
+    if (!preview) return;
+    $("app-notice").hidden = true;
+    const dialog = node("dialog", undefined, "adaptation-dialog");
+    const heading = node("h2", "Confirmar despliegue");
+    heading.id = "adaptation-dialog-title";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    dialog.append(heading, node("p", preview.title), node("p", `Destino: ${preview.site_url}`));
+    dialog.append(node("p", preview.mode === "create"
+      ? "La entrada anterior ya no existe. Se creará un borrador nuevo."
+      : `Se actualizará la entrada #${preview.post_id}, conservando su estado: ${preview.remote_status}.`));
+    dialog.append(node("p", `Imagen destacada: ${preview.featured_media} · Categorías: ${preview.categories.join(", ") || "Sin categorías"}`));
+    preview.warnings.forEach((warning) => dialog.append(node("p", warning)));
+    function checkbox(labelText) {
+      const label = node("label", undefined, "adaptation-confirmation");
+      const input = node("input");
+      input.type = "checkbox";
+      label.append(input, document.createTextNode(labelText));
+      dialog.append(label);
+      return input;
+    }
+    const ctas = preview.pending_ctas ? checkbox("Permitir que este borrador conserve marcadores CTA pendientes de completar.") : null;
+    const live = preview.live_update ? checkbox("Entiendo que esta entrada está publicada o programada y autorizo sustituir su contenido.") : null;
+    const controls = node("div", undefined, "adaptation-actions");
+    const cancel = node("button", "Cancelar");
+    const send = node("button", preview.mode === "create" ? "Crear borrador" : "Actualizar entrada");
+    cancel.type = send.type = "button";
+    controls.append(cancel, send);
+    dialog.append(controls);
+    const sync = () => { send.disabled = Boolean((ctas && !ctas.checked) || (live && !live.checked)); };
+    ctas?.addEventListener("change", sync);
+    live?.addEventListener("change", sync);
+    sync();
+    let sending = false;
+    cancel.addEventListener("click", () => dialog.close());
+    dialog.addEventListener("cancel", (event) => { if (sending) event.preventDefault(); });
+    dialog.addEventListener("close", () => dialog.remove());
+    send.addEventListener("click", async () => {
+      if (sending || send.disabled) return;
+      sending = true;
+      send.disabled = cancel.disabled = true;
+      setAdaptationBusy(true);
+      send.textContent = "Enviando…";
+      try {
+        const result = await api(`/api/generation/trials/${trial.id}/redeploy`, { method: "POST", body: JSON.stringify({
+          request_key: crypto.randomUUID(), revision: preview.revision,
+          allow_pending_ctas: Boolean(ctas?.checked), confirm_live: Boolean(live?.checked),
+        }) });
+        if (result.status === "completed") notice("Despliegue completado. Se reutilizó el texto guardado, sin llamar a OpenAI.");
+        else showError(result.error || "El envío está en curso. Consulte su estado en el historial.");
+      } catch (error) { showError(`${error.message} Consulte el historial antes de repetir la acción.`); }
+      finally {
+        sending = false;
+        dialog.close();
+        await window.ETPanel.refreshArticles();
+        setAdaptationBusy(false);
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
   }
 
   function switchMainTab(name) {

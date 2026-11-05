@@ -1,0 +1,149 @@
+ENTRETRÁMITES | Imágenes en WordPress y prompts de regionalización
+
+1. CÓMO AUTOMATIZAR LA BÚSQUEDA DE IMÁGENES
+
+Para los casi 300 artículos, la ruta recomendada es buscar primero en la
+biblioteca de EntreTrámites, consultar un banco gratuito cuando haga falta y
+usar una portada por categoría como último recurso. El script elige la foto y
+WordPress recibe su ID. Puedes hacerlo sin generar imágenes con IA ni añadir
+otra llamada de pago por artículo.
+
+Opción A. Incorporar la selección al script de publicación
+
+1) Define qué buscar. A partir del título y la categoría, obtén uno o dos
+   términos que describan algo visible. Para «Cómo renovar la TIE en España»,
+   prueba «tarjeta de identidad de extranjero» y después «documentación de
+   extranjería». Puedes mantener un pequeño diccionario por tema en Python.
+   Si el artículo se traduce al portugués, sigue buscando en el idioma en que
+   estén descritas las fotos del sitio.
+
+2) Busca en tu biblioteca. Ejemplo de consulta sobre el dominio de tu sitio:
+   GET /wp-json/wp/v2/media?media_type=image&search=extranjeria&orderby=relevance&per_page=5
+   Compara los títulos, leyendas y descripciones de los resultados. Entre las
+   fotos autorizadas para reutilizar, prioriza una que represente el tema y
+   tenga la orientación que requiere la plantilla. Un logotipo o una foto de
+   un empleado pueden contener la palabra «extranjería» y aun así no servir
+   como portada. Si encuentras una buena coincidencia, guarda su ID.
+
+3) Si falta una foto adecuada, consulta el Directorio de fotos de WordPress.org.
+   Es un catálogo externo de fotos CC0 que admite uso comercial. Ejemplo de
+   consulta pública, usando un término visual en inglés:
+   GET https://wordpress.org/photos/wp-json/wp/v2/photos?search=paperwork&per_page=5&_embed=true
+   Comprueba la descripción y la procedencia, descarga únicamente la elegida
+   y súbela a tu sitio con una petición autenticada a POST /wp-json/wp/v2/media.
+   Usa el ID que devuelva TU sitio. Conserva la URL de origen y la licencia.
+   Si la imagen muestra papeles sobre una mesa, descríbela así en el texto
+   alternativo. Identifícala como una TIE solo si realmente muestra esa tarjeta.
+
+4) Si ambas búsquedas fallan, usa la portada de respaldo. Configura una vez un
+   ID por categoría, por ejemplo Extranjería, Impuestos o Vida en España. Así
+   el lote puede continuar aunque un artículo tenga un tema muy específico.
+
+5) Publica la portada y el cuerpo por separado. Envía a POST /wp-json/wp/v2/posts
+   el título en title, el HTML completo de generation_trials.html en content y
+   el ID local de la portada en featured_media. Si también quieres una imagen
+   dentro del texto, el script puede insertar un <figure> en la sección elegida
+   antes de enviar el HTML. Evita repetir la portada si la plantilla ya la muestra.
+
+6) Guarda la selección en SQLite junto al artículo y al sitio de destino. Ante
+   un reintento o una traducción que use la misma foto en el mismo WordPress,
+   reutiliza ese ID. Si cambia el sitio o la edición regional requiere otra
+   imagen, resuelve la portada para ese destino.
+
+Opción B. Hacerlo desde WordPress con un plugin
+
+All Sources Images permite obtener términos del título, contenido, etiquetas
+o categorías y asignar una imagen destacada al publicar o procesar entradas
+en lote. Configura un proveedor gratuito que permita el uso previsto y deja
+desactivada la generación con IA. Comprueba sus límites y licencias para el
+volumen del proyecto. Si eliges esta vía, deja la portada a cargo del plugin
+para que el script y el plugin no intenten elegirla a la vez.
+
+Prueba antes del lote. Crea un borrador por API con la categoría real, o haz
+una publicación de prueba en un entorno de pruebas si el plugin solo se activa
+al publicar. Abre la vista previa en móvil y comprueba que la plantilla muestra
+una sola portada, el título y el cuerpo. Prueba también un término sin resultados
+para confirmar que aparece la portada de respaldo.
+
+Referencias para la implementación:
+• API de medios: https://developer.wordpress.org/rest-api/reference/media/
+• API de entradas: https://developer.wordpress.org/rest-api/reference/posts/
+• Consulta del directorio: https://meta.trac.wordpress.org/ticket/6313
+• Licencia de las fotos: https://wordpress.org/photos/license/
+• Plugin: https://wordpress.org/plugins/all-sources-images/
+
+
+2. QUÉ AÑADIR O CORREGIR EN LOS PROMPTS DE REGIONALIZACIÓN
+
+Las siguientes instrucciones sirven para cada público. Define en el script el
+país de origen, el país de destino, el idioma o variante, el tratamiento elegido
+y la moneda local. Para temas legales o fiscales, aporta las fuentes oficiales
+pertinentes. Para importes, aporta las equivalencias calculadas y su fecha.
+
+A. Decidir si el artículo se adapta
+«Antes de redactar, identifica la pregunta central del artículo y para quién
+es válida la respuesta. Si la misma condición se aplica al público de destino,
+consérvala. Si existe una condición local distinta que resuelve la misma
+necesidad, adapta el artículo explicando sus requisitos y diferencias según
+una fuente oficial vigente. Una semejanza de nombre o finalidad por sí sola
+es insuficiente para afirmar que hay equivalencia.
+
+Si solo un apartado depende de una condición exclusiva del público original,
+omite o sustituye ese apartado y continúa con el resto. Si todo el artículo
+depende de esa exclusividad y se ha confirmado que no hay una alternativa
+aplicable, detén la adaptación. Si falta información para decidir algo
+esencial, deja el artículo pendiente de verificación».
+
+Aplicación en el script: toma esta decisión antes de generar el HTML. Registra
+«adaptar», «omitir» o «pendiente de verificación» y un motivo breve fuera del
+cuerpo publicable. Solo «adaptar» pasa a redacción. Por ejemplo, una guía sobre
+alquilar en Madrid puede conservarse aunque haya que retirar un apartado
+exclusivo de EE. UU. Una guía dedicada por completo a un beneficio exclusivo
+requiere resolver primero si existe una alternativa para el público elegido.
+
+B. Conservar euros y añadir la equivalencia local
+«Mantén cada importe original en euros y añade entre paréntesis su equivalencia
+aproximada en la moneda del público. Usa pesos colombianos (COP) para Colombia,
+soles (PEN) para Perú y reales brasileños (BRL) para Brasil. Respeta los rangos,
+las unidades y la periodicidad del original. Para tasas o umbrales oficiales,
+mantén el euro como importe de referencia. Usa únicamente las conversiones
+suministradas e indica la fecha o el mes de referencia. Si falta la cotización,
+conserva el importe en euros y deja la conversión pendiente fuera del HTML».
+
+Aplicación en el script: obtén una cotización fechada por moneda y periodo,
+guárdala con su fuente y calcula antes de redactar. Si la tasa se expresa en
+moneda local por 1 EUR, multiplica el importe en euros por esa tasa. Una fuente
+gratuita para estimaciones mensuales es InforEuro, de la Comisión Europea:
+https://commission.europa.eu/funding-and-tenders/procedures-guidelines-tenders/information-contractors-and-beneficiaries/exchange-rate-inforeuro_es
+
+Ejemplo de redacción con una tasa ficticia de 4.500 COP por euro:
+«Si tu presupuesto para mudarte a Madrid es de 3.000 €, eso equivale a unos
+13.500.000 pesos colombianos». En producción, añade el mes de la cotización
+real. El ejemplo ilustra un presupuesto personal, no el coste de una mudanza.
+
+C. Entregar HTML compatible con la plantilla
+«Devuelve únicamente el cuerpo del artículo como un fragmento HTML. Usa <h2>
+para secciones, <h3> para subsecciones, <p> para párrafos breves, <ol> y <li>
+para pasos en orden, <ul> y <li> para listas sin orden, y <strong> para énfasis
+puntual. Omite el título principal, las imágenes, los estilos, las clases, los
+identificadores, los scripts y el código de constructores. Entrega el HTML
+directamente, sin cercas de código ni Markdown».
+
+Aplicación en WordPress: conserva el fragmento en generation_trials.html.
+Comprueba que la plantilla de entrada muestra el campo de contenido donde debe
+ir el cuerpo. Si existe un espacio independiente, por ejemplo una introducción
+en un campo personalizado, el script debe rellenar ese campo expresamente.
+
+D. Localizar el lenguaje sin añadir trámites por costumbre
+«Escribe en la variante del idioma definida para el público y mantén el mismo
+tratamiento en toda la edición. Ajusta los ejemplos a su situación. Distingue
+entre quien prepara la mudanza desde el país de origen y quien ya reside en
+España cuando eso cambie la orientación. Menciona apostillas, consulados u
+otros trámites únicamente si corresponden al procedimiento y a ese lector».
+
+E. Retirar credenciales y conservar las condiciones importantes
+«Elimina las firmas y los paneles de revisión profesional del artículo de
+origen, incluidas expresiones como “revisado por un abogado”. Conserva las
+condiciones, excepciones y advertencias sustantivas que sigan siendo aplicables.
+Evita atribuir a EntreTrámites una revisión que no se haya realizado o convertir
+una credencial eliminada en un consejo nuevo».

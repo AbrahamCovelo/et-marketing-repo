@@ -20,6 +20,7 @@ from .repository import Repository
 from src.deployment.repository import DeploymentRepository
 from src.deployment.wp_publisher import DeploymentDisabledError
 from .deployment_routes import register_deployment_routes
+from src.deployment.management import initialize_management, AdaptationConflict
 
 
 def _integer(value, name: str, default: int) -> int:
@@ -55,6 +56,7 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
     repository = Repository(app.config['DATABASE_PATH'])
     generation = GenerationRepository(app.config['DATABASE_PATH'])
     deployment = DeploymentRepository(app.config['DATABASE_PATH'], app.config['DEPLOYMENT_ENV_PATH'])
+    initialize_management(app.config['DATABASE_PATH'])
     jobs = job_manager if job_manager is not None else JobManager(app.config['DATABASE_PATH'])
     app.extensions['panel_repository'] = repository
     app.extensions['panel_jobs'] = jobs
@@ -88,6 +90,10 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
     @app.errorhandler(ValueError)
     def invalid_input(error):
         return jsonify(error=str(error)), 400
+
+    @app.errorhandler(AdaptationConflict)
+    def adaptation_conflict(error):
+        return jsonify(error=str(error)), 409
 
     @app.errorhandler(KeyError)
     def not_found(error):

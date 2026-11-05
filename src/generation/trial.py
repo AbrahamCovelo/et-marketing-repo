@@ -72,9 +72,14 @@ def _read_rows(db_path, where="", params=()):
         connection.row_factory = sqlite3.Row
         if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_trials'").fetchone():
             return []
-        return [_record(row) for row in connection.execute(
+        records = [_record(row) for row in connection.execute(
             f"SELECT * FROM generation_trials {where} ORDER BY id DESC", params
         )]
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone():
+            deleted = dict(connection.execute('SELECT trial_id,deleted_at FROM adaptation_deletions'))
+            for record in records:
+                record['deleted_at'] = deleted.get(record['id'])
+        return records
 
 
 def get_trial(db_path, trial_id):
@@ -84,6 +89,8 @@ def get_trial(db_path, trial_id):
     records = _read_rows(db_path, "WHERE id=?", (trial_id,))
     if not records:
         raise KeyError("No existe la prueba solicitada.")
+    if records[0].get('deleted_at'):
+        raise ValueError("El contenido de esta adaptación fue eliminado de la base local.")
     return records[0]
 
 
@@ -97,6 +104,8 @@ def list_trials(db_path, article_id=None):
 
 
 def _same_trial(record, article_id, configuration_id, model, service_tier):
+    if record.get('deleted_at'):
+        raise ValueError("La adaptación fue eliminada; su clave sigue reservada y no se generará de nuevo automáticamente.")
     if (record["article_id"], record["configuration_id"], record["model"]) != (article_id, configuration_id, model):
         raise ValueError("La clave de la prueba ya pertenece a otro artículo, configuración o modelo.")
     if record["request"].get("service_tier", "default") != service_tier:

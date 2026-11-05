@@ -1,6 +1,6 @@
 # Base de contenido para localización
 
-Extracción de guías de Moving to Spain, limpieza determinista, almacenamiento local en SQLite y un panel para revisar el contenido y preparar sus adaptaciones. Los documentos originales están en [extras/Idea general del proyecto.txt](<extras/Idea general del proyecto.txt>) y [extras/posible_estructura_del_proyecto.txt](extras/posible_estructura_del_proyecto.txt). Se admiten pruebas individuales explícitas de generación; la ejecución masiva y el envío a WordPress desde el panel siguen deshabilitados.
+Extracción de guías de Moving to Spain, limpieza determinista, almacenamiento local en SQLite y un panel para revisar el contenido y gestionar sus adaptaciones. Los documentos originales están en [extras/Idea general del proyecto.txt](<extras/Idea general del proyecto.txt>) y [extras/posible_estructura_del_proyecto.txt](extras/posible_estructura_del_proyecto.txt). Se admiten pruebas individuales explícitas de generación y, desde el historial del panel, borrado local y reenvío de adaptaciones ya desplegadas. La generación masiva permanece deshabilitada.
 
 El [diseño de extracción](docs/diseno-extraccion.md) explica los hallazgos de 15 guías, qué se conserva, el modelo de datos y cómo se registran las omisiones sin inventar contenido.
 
@@ -62,7 +62,9 @@ La sección «WordPress · Preparación» utiliza las tres conexiones privadas y
 
 El documento de borrador separa `title`, `content`, `excerpt`, `featured_media` y `categories`. WordPress puede mostrar una misma imagen destacada en la tarjeta y el artículo si ambas plantillas la utilizan; hay que elegir o subir un archivo existente. El panel no crea fotografías, no sube medios ni envía artículos. Un servicio separado permite enviar una prueba individual explícita exclusivamente como borrador, con un registro que impide repetir el POST. Los prompts exigen HTML semántico sin estilos ni código del tema, y un validador local comprueba el cuerpo y los CTA antes de preparar el documento.
 
-La ruta de envío del panel sigue bloqueada. Consulte el servicio de pruebas individuales, imágenes y verificaciones pendientes en [Preparación de WordPress](docs/preparacion-wordpress.md).
+La ruta genérica de primer envío sigue bloqueada. En **Revisión de datos → Adaptaciones** puede volver a desplegar un resultado que ya tenga una entrada identificada: se comprueba el destino, se solicita confirmación y se actualiza la misma entrada conservando su estado. Solo si WordPress confirma que ya no existe se propone crear un nuevo borrador. El envío reutiliza el contenido local y no llama a OpenAI. Consulte [Preparación de WordPress](docs/preparacion-wordpress.md).
+
+**Borrar de la base local** vacía el texto generado y sus copias en las tablas, conserva un registro mínimo del intento y actualiza los contadores. No elimina la entrada de WordPress, el original extraído ni los archivos exportados. La confirmación explica que el contenido no se puede recuperar desde el panel. Reinicie el panel para cargar las acciones y sus tablas de historial.
 
 ## Uso
 

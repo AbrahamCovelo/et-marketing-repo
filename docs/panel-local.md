@@ -69,6 +69,27 @@ Guardar dos veces las mismas combinaciones reutiliza las preparaciones activas, 
 
 Cuando una prueba se envía explícitamente mediante el servicio individual, ese historial también muestra su estado en WordPress. Para Barcelona permite abrir el borrador 1546 en el editor del sitio colombiano, con la imagen 1369. El enlace requiere iniciar sesión en WordPress y no publica la entrada; el texto y los CTA siguen pendientes de revisión.
 
+### Acciones sobre adaptaciones guardadas
+
+En **Revisión de datos → Adaptaciones**, cada resultado ofrece:
+
+- **Borrar de la base local**: requiere confirmación. Vacía el HTML, la respuesta y el contexto guardados, así como las copias de contenido de los envíos. Conserva IDs, consumo y claves que impiden repetir intentos accidentalmente. El original extraído, WordPress, las exportaciones y los respaldos no cambian. El historial muestra que se eliminó el contenido; deja de contar como adaptación activa y ya no permite reenviarla. No hay restauración desde el panel.
+- **Volver a desplegar**: disponible para adaptaciones completas con un primer envío y una entrada identificada. Primero consulta WordPress para mostrar si actualizará esa entrada o creará un borrador porque el ID anterior ya no existe. Comprueba imagen y categorías; utiliza el título y las categorías del envío anterior, el HTML local y los CTA actualmente configurados. Puede sustituir cambios hechos directamente en WordPress.
+
+En actualizaciones se conserva el estado remoto y no se modifica el slug. Una entrada publicada o programada exige una casilla adicional de confirmación. Los CTA pendientes requieren confirmación expresa y solo se permiten en borradores. Si la entrada está en la papelera, hay que restaurarla en WordPress antes de reenviar. Un error de permisos o de conexión nunca se interpreta como que falta la entrada.
+
+Antes de enviar se repite la comprobación del destino. Si cambió respecto a la confirmación, el panel pide revisar de nuevo. Cada confirmación tiene una clave única y un registro reservado antes del POST: repetir esa misma solicitud no repite el envío. Los resultados inciertos o interrumpidos bloquean otro envío y el borrado hasta comprobar manualmente el intento; no se reintentan automáticamente. Ninguna de estas acciones llama a OpenAI.
+
+Rutas protegidas por el token y el origen del panel:
+
+| Ruta | Acción |
+|---|---|
+| `DELETE /api/generation/trials/<id>` | Borrado local con `confirm: true` |
+| `POST /api/generation/trials/<id>/redeploy-preview` | Comprobaciones de lectura en WordPress y resumen de confirmación |
+| `POST /api/generation/trials/<id>/redeploy` | Envío explícito con clave única, revisión comprobada y confirmaciones |
+
+La generación masiva y las rutas genéricas `/api/generation/execute` y `/api/deployment/execute` siguen bloqueadas. Los nuevos controles se cargan al reiniciar el panel. Se verificaron con una base temporal y respuestas WordPress simuladas; su desarrollo no borró ni reenvió la adaptación real de Barcelona.
+
 La configuración privada usa `.env`, ignorado por Git, con [.env.example](../.env.example) como referencia sin secretos. `extras/EntreTramites.txt` también se ignora. El panel muestra únicamente la presencia de una credencial; no la expone ni comprueba su validez. Consulte [Preparación de generación](preparacion-generacion.md) para el contrato de las plantillas y la persistencia.
 
 ## Fechas

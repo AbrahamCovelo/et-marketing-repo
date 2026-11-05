@@ -111,6 +111,14 @@ Con la nueva conexión se creó el [borrador 1546](https://colombianosespana.com
 
 El historial del panel muestra el estado de WordPress y un enlace al editor construido con el dominio autorizado y el ID confirmado. La comprobación de conexión de este envío no convierte los indicadores de mera presencia de credenciales del formulario en una monitorización continua.
 
+### Reenvío desde el historial
+
+Desde el 5 de noviembre, `src/deployment/management.py` añade acciones explícitas del panel sobre adaptaciones previamente enviadas. Conserva el primer registro de `deployment_trials` y añade cada intento posterior en `adaptation_actions`. La entrada usada en la siguiente comprobación procede del último intento confirmado, incluido un borrador recreado con otro ID.
+
+El reenvío actualiza `POST /wp/v2/posts/<id>` conservando el estado y el slug de la entrada existente. Solo ante un 404 con código `rest_post_invalid_id` propone crear un borrador con `POST /wp/v2/posts`. Un 401, 403, error de servidor, respuesta ilegible o entrada en papelera no activa creación automática. El diálogo muestra el destino y las condiciones antes de confirmar. [Contrato de entradas de WordPress](https://developer.wordpress.org/rest-api/reference/posts/).
+
+Los controles de borrado solo modifican las tablas locales. No existe una llamada DELETE a WordPress en este flujo. El texto original generado y los documentos de envíos se vacían al borrar una adaptación; los metadatos mínimos y el historial de IDs permanecen. Consulte [acciones del panel](panel-local.md#acciones-sobre-adaptaciones-guardadas).
+
 ## Inspección pública anterior y límites de esa verificación
 
 La inspección de lectura del 4 de noviembre de 2026 encontró un listado paginado de artículos en la página inglesa mediante la herramienta web. Las consultas directas públicas a ambas páginas y a endpoints específicos de entradas, páginas, categorías y tipos devolvieron HTTP403 desde este entorno. La raíz REST de Colombianos respondió correctamente en una consulta y declaró rutas estándar y namespaces de Elementor; eso no permite confirmar permisos ni comportamientos automáticos.

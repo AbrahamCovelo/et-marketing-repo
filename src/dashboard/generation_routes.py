@@ -4,6 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 from src.generation.preparation import PLACEHOLDERS, execute_generation, preview_preparation
 from src.generation.settings import public_status
 from src.generation.model_options import MODEL_REFERENCE
+from src.deployment.management import delete_adaptation, preview_redeployment, redeploy_adaptation
 
 
 def register_generation_routes(app, repository):
@@ -97,6 +98,28 @@ def register_generation_routes(app, repository):
     @routes.get('/api/generation/trials/<int:trial_id>')
     def trial_detail(trial_id):
         return jsonify(repository.trial_detail(trial_id))
+
+    @routes.delete('/api/generation/trials/<int:trial_id>')
+    def delete_trial(trial_id):
+        body = payload()
+        if set(body) != {'confirm'} or body['confirm'] is not True:
+            raise ValueError('Confirme el borrado del contenido local.')
+        return jsonify(delete_adaptation(current_app.config['DATABASE_PATH'], trial_id))
+
+    @routes.post('/api/generation/trials/<int:trial_id>/redeploy-preview')
+    def redeploy_preview(trial_id):
+        if payload():
+            raise ValueError('La comprobación no admite parámetros.')
+        return jsonify(preview_redeployment(current_app.config['DATABASE_PATH'], trial_id,
+                       env_path=current_app.config['DEPLOYMENT_ENV_PATH']))
+
+    @routes.post('/api/generation/trials/<int:trial_id>/redeploy')
+    def redeploy_trial(trial_id):
+        body = payload()
+        if set(body) != {'request_key', 'revision', 'allow_pending_ctas', 'confirm_live'}:
+            raise ValueError('Se requieren la comprobación del destino y las confirmaciones del envío.')
+        return jsonify(redeploy_adaptation(current_app.config['DATABASE_PATH'], trial_id,
+                       env_path=current_app.config['DEPLOYMENT_ENV_PATH'], **body))
 
     @routes.post('/api/generation/execute')
     def execute_disabled():
