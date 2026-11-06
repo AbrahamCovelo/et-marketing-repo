@@ -8,6 +8,7 @@ import requests
 
 from src.deployment.repository import DeploymentRepository
 from src.deployment.trial import get_deployment_trial, send_trial_draft
+from src.deployment.categories import refresh_category_catalog, save_category_policy
 from src.extraction.db_manager import Database
 from src.extraction.models import ExtractionResult
 from src.generation.presets import load_editorial_prompts
@@ -39,6 +40,10 @@ def saved_trial(tmp_path, monkeypatch):
              destination_id,model,status,request_json,snapshot_json,html,created_at)
             VALUES (1,'fixture',1,1,3,?,?,3,'gpt-test','completed','{}','{}',?,'2026-11-04T00:00:00Z')""",
             (context["configuration"]["current_version_id"],context["prompt"]["version_id"],"<h2>Barcelona</h2><p>Una guía.</p>"))
+    DeploymentRepository(path, env)
+    catalog = refresh_category_catalog(path, 3, env_path=env, session=Session())
+    save_category_policy(path, 3, {"allowed_category_ids": [19, 23], "excluded_default_category_id": 77,
+                                  "catalog_revision": catalog["catalog_revision"]})
     return path, env
 
 
@@ -49,7 +54,7 @@ class Session:
         self.status = status
         self.get_status = get_status
         self.post_body = post_body if post_body is not None else {
-            "id": 1510, "status": "draft", "featured_media": 1369,
+            "id": 1510, "status": "draft", "featured_media": 1369, "categories": [19, 23],
             "link": "https://colombianosespana.com/?p=1510", "ignored_secret": SECRET}
         self.exception = exception
         self.before_post = before_post
@@ -66,8 +71,15 @@ class Session:
                 raise self.exception
             return SimpleNamespace(status_code=self.status, json=lambda:self.post_body)
         route = kwargs["params"]["rest_route"]
-        body = self.user if route.endswith("users/me") else self.categories if route.endswith("categories") else self.media
-        return SimpleNamespace(status_code=self.get_status, json=lambda:body)
+        if route.endswith("categories"):
+            body = [{"id": item["id"], "name": f"Category {item['id']}", "slug": f"cat-{item['id']}",
+                     "description": "", "parent": 0} for item in self.categories]
+            body.append({"id": 77, "name": "Default", "slug": "default", "description": "", "parent": 0})
+        elif route.endswith("settings"):
+            body = {"default_category": 77}
+        else:
+            body = self.user if route.endswith("users/me") else self.media
+        return SimpleNamespace(status_code=self.get_status, json=lambda:body, headers={"X-WP-TotalPages": "1"})
 
 
 def send(saved_trial, session, **kwargs):
@@ -96,7 +108,7 @@ def test_only_one_draft_is_sent_and_result_has_no_credentials(saved_trial):
     assert "ignored_secret" not in result["result"]
     env.unlink()
     assert send(saved_trial,session) == result
-    assert len(session.calls) == 4
+    assert len(session.calls) == 5
 
 
 def assert_reserved(path):
@@ -187,7 +199,7 @@ def test_unexpected_remote_status_is_recorded_for_manual_reconciliation(saved_tr
     assert "link" not in result["result"]
     assert session.calls[-1][2]["json"]["status"] == "draft"
     send(saved_trial,session)
-    assert len(session.calls) == 4
+    assert len(session.calls) == 5
 
 
 def test_completed_trial_required_before_network(saved_trial):

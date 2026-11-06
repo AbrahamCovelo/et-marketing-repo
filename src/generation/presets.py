@@ -24,7 +24,7 @@ def load_editorial_prompts(db_path, prompts_dir=None):
         if not role:
             raise ValueError(f"Falta la instrucción de rol en {filename}")
         render_template(template, dict.fromkeys(PLACEHOLDERS, ""))
-        payloads.append((key, {"name": name, "description": "Plantilla suministrada el 2026-11-04; pendiente de pruebas editoriales.",
+        payloads.append((key, {"name": name, "description": "Plantilla reforzada el 2026-11-05: aplicabilidad previa, fuentes verificadas, euros y conversiones suministradas; pendiente de pruebas editoriales.",
                                "system_prompt": role, "template": template, "status": "draft", "archived": False}))
     repo = GenerationRepository(db_path)
     targets = []
@@ -40,7 +40,7 @@ def load_editorial_prompts(db_path, prompts_dir=None):
     for prompt_id, configuration, payload in targets:
         prompt = repo.save_prompt(payload, prompt_id)
         fields = {key: configuration[key] for key in ("name", "destination_id", "provider", "model", "notes", "enabled")}
-        fields.update(prompt_version_id=prompt["version_id"], notes="Plantilla cargada; pendiente de pruebas, modelo definitivo y conexión con los sitios.")
+        fields.update(prompt_version_id=prompt["version_id"], notes="Plantilla reforzada; la redacción requiere una revisión de aplicabilidad vigente por artículo y destino. Pendiente de pruebas editoriales.")
         saved = repo.save_configuration(fields, configuration["id"])
         loaded.append({"configuration_id": saved["id"], "prompt_id": prompt["id"], "prompt_version": prompt["version"],
                        "configuration_version": saved["current_version"], "locale": saved["locale"]})

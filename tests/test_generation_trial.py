@@ -10,6 +10,7 @@ from src.extraction.db_manager import Database
 from src.extraction.models import ExtractionResult
 from src.generation.presets import load_editorial_prompts
 from src.generation.trial import get_trial, list_trials, run_trial
+from src.generation.applicability import save_review
 
 
 SECRET = "sk-test-secret-never-persist-this-value"
@@ -30,6 +31,13 @@ def corpus(tmp_path, monkeypatch):
                      "text": "Barcelona has public transport.", "section_path": [], "data": {}, "flags": []}])
         db.store_article(source, raw_html="<main>WITHHELD RAW HTML</main>")
     load_editorial_prompts(path)
+    save_review(path, 1, 3, {
+        'decision': 'adapt', 'reason': 'Información general sobre transporte urbano aplicable al público colombiano.',
+        'central_question': '¿Cómo es el transporte urbano de Barcelona?', 'reviewer': 'Revisión de prueba',
+        'excluded_sections': [], 'evidence': [],
+        'checks': {'central_applicable': True, 'whole_article_exclusive': False,
+                   'alternative_applicable': None, 'essential_information_verified': True},
+    })
     return path, env
 
 

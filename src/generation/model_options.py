@@ -1,18 +1,18 @@
-"""Local model choices and planned execution settings; never contacts a provider."""
+"""Model identifier validation and planned execution settings.
+
+The model picker is populated by ``model_catalog`` from the account's API.
+This module keeps preparation local and never guesses account availability.
+"""
 import re
 
 
 MODEL_REFERENCE = {
-    "checked_at": "2026-11-04",
-    "source_url": "https://developers.openai.com/api/docs/pricing",
+    "checked_at": None,
+    "source_url": "https://developers.openai.com/api/reference/resources/models/methods/list",
     "availability_checked": False,
-    "models": [
-        {"id": "gpt-6-luna", "label": "GPT-6 Luna · opción económica actual"},
-        {"id": "gpt-5-nano-2025-08-07", "label": "GPT-5 nano · tarifa menor, en retirada"},
-        {"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra"},
-        {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol"},
-        {"id": "gpt-6-astra", "label": "GPT-6 Astra"},
-    ],
+    "models": [],
+    "dynamic": True,
+    "catalog_url": "/api/generation/models",
 }
 
 

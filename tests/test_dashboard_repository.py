@@ -53,6 +53,51 @@ def test_search_is_case_and_accent_insensitive_literal_and_injection_safe(corpus
     assert repo.summary()["articles"] == 3
 
 
+def _adaptation_history(path):
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE generation_trials(id INTEGER PRIMARY KEY,article_id INTEGER,status TEXT,created_at TEXT,completed_at TEXT)')
+        db.executemany('INSERT INTO generation_trials VALUES (?,?,?,?,?)', [
+            (1,1,'completed','2026-11-04T18:00:00Z','2026-11-04T18:01:00Z'),
+            (2,1,'completed','2026-11-08T18:00:00Z','2026-11-08T18:01:00Z'),
+            (3,2,'completed','2026-11-06T04:00:00Z','2026-11-06T04:30:00Z'),
+            (4,3,'failed','2026-11-09T18:00:00Z','2026-11-09T18:01:00Z'),
+            (5,1,'incomplete','2026-11-10T18:00:00Z','2026-11-10T18:01:00Z'),
+        ])
+        db.execute('CREATE TABLE adaptation_deletions(trial_id INTEGER PRIMARY KEY)')
+        db.execute('INSERT INTO adaptation_deletions VALUES(2)')
+
+
+def test_recent_adaptations_ignore_deleted_and_unsuccessful_attempts(corpus):
+    path, repo, _ = corpus
+    _adaptation_history(path)
+    rows = repo.list_articles(sort='adapted_desc')['items']
+    assert [r['id'] for r in rows] == [2,1,3]
+    assert rows[0]['last_adapted_at'] == '2026-11-06T04:30:00.000Z'
+    assert rows[1]['last_adapted_at'] == '2026-11-04T18:01:00.000Z'
+    assert rows[2]['last_adapted_at'] is None
+    assert repo.list_articles(adaptation='adapted')['total'] == 2
+    assert [r['id'] for r in repo.list_articles(adaptation='not_adapted')['items']] == [3]
+    assert repo.list_articles(sort='adapted_desc',page_size=1,page=2)['items'][0]['id'] == 1
+
+
+def test_adaptation_date_and_bulk_selection_share_bogota_calendar_filters(corpus):
+    path, repo, _ = corpus
+    _adaptation_history(path)
+    filters = dict(adaptation='adapted',date_field='last_adapted_at',date_from='2026-11-05',date_to='2026-11-05',sort='adapted_desc')
+    assert [r['id'] for r in repo.list_articles(**filters)['items']] == [2]
+    assert repo.select_matching(**filters)['matched_count'] == 1
+    assert [r['id'] for r in repo.list_articles(selected_only=True)['items']] == [2]
+
+
+def test_adaptation_filters_work_before_any_generation_table_exists(corpus):
+    _, repo, _ = corpus
+    assert repo.list_articles(adaptation='adapted',sort='adapted_desc')['total'] == 0
+    assert repo.list_articles(adaptation='not_adapted')['total'] == 3
+    assert repo.list_articles(date_field='last_adapted_at',date_from='2026-11-01')['total'] == 0
+    with pytest.raises(ValueError,match='Filtro de adaptaciones'):
+        repo.list_articles(adaptation="adapted' OR 1=1 --")
+
+
 def test_select_matching_includes_all_pages_preserves_other_selection_and_versions(corpus):
     path, repo, _ = corpus
     with Database(path) as db:

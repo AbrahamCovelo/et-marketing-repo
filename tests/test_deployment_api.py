@@ -1,6 +1,7 @@
 """WordPress preparation is local, secret-free and cannot publish."""
 import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -9,6 +10,7 @@ from src.dashboard.app import create_app
 from src.deployment.credentials_import import import_site_credentials
 from src.deployment.repository import DeploymentRepository
 from src.deployment.settings import CONNECTIONS, credentials_status, load_credentials
+from src.deployment.categories import refresh_category_catalog, save_category_policy
 from src.generation.repository import GenerationRepository
 
 
@@ -40,19 +42,31 @@ def settings(target):
 
 
 def configure_english(panel):
-    _, client, _, _ = panel
+    _, client, path, env = panel
     target = client.get('/api/deployment/catalog').json['targets'][0]
     body = settings(target)
     body['category_ids'] = [21]
     body['cta_links']['CTA_IMMIGRATION_EN'] = {'url': 'https://canadiansinspain.com/immigration/', 'text': 'Immigration help'}
     response = mutate(panel, f"/api/deployment/targets/{target['id']}", body, 'PUT')
     assert response.status_code == 200
+    class CatalogSession:
+        def request(self, method, url, **kwargs):
+            assert method == 'GET' and url == 'https://canadiansinspain.com/'
+            if kwargs['params']['rest_route'].endswith('settings'):
+                body = {'default_category': 87}
+            else:
+                body = [{'id': value, 'name': f'Category {value}', 'slug': f'category-{value}',
+                         'description': '', 'parent': 0} for value in (21, 87)]
+            return SimpleNamespace(status_code=200, headers={'X-WP-TotalPages': '1'}, json=lambda: body)
+    catalog = refresh_category_catalog(path, target['id'], env, CatalogSession())
+    save_category_policy(path, target['id'], {'allowed_category_ids': [21], 'excluded_default_category_id': 87,
+                                             'catalog_revision': catalog['catalog_revision']})
     return target['id']
 
 
 def draft(target_id):
     return {'target_id': target_id, 'title': 'A guide', 'html': '<h2>First steps</h2><p>Read [CTA_IMMIGRATION_EN].</p>',
-            'excerpt': 'A short guide.', 'featured_media': 42}
+            'excerpt': 'A short guide.', 'featured_media': 42, 'category_ids': [21]}
 
 
 def test_catalog_has_three_routes_and_only_credential_presence(panel):

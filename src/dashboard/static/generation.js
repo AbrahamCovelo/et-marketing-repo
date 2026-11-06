@@ -6,7 +6,7 @@
   const state = {
     catalog: null, loading: null, articleIds: [], dialogBusy: false,
     destinationId: null, promptId: null, configurationId: null,
-    saving: false, dialogSequence: 0,
+    saving: false, dialogSequence: 0, ctaSequence: 0, ctaLoading: false, ctaData: null,
   };
 
   function node(tag, text, className) {
@@ -75,6 +75,89 @@
     $("destination-locale").value = item?.locale || "";
     $("destination-notes").value = item?.notes || "";
     $("destination-enabled").checked = item ? Boolean(item.enabled) : true;
+    loadDestinationCtas(state.destinationId);
+  }
+
+  function renderDestinationCtas(data) {
+    const fragment = document.createDocumentFragment();
+    Object.entries(data.cta_links || {}).forEach(([marker, link]) => {
+      const fieldset = node("fieldset", null, "deployment-cta");
+      fieldset.dataset.cta = marker;
+      fieldset.append(node("legend", `[${marker}]`));
+      const grid = node("div", null, "form-grid");
+      const urlLabel = node("label", "URL del enlace (puede quedar vacía)");
+      const url = node("input");
+      url.type = "url";
+      url.maxLength = 2000;
+      url.autocomplete = "off";
+      url.placeholder = "Pendiente de crear la página";
+      url.dataset.ctaField = "url";
+      url.value = link.url || "";
+      urlLabel.append(url);
+      const textLabel = node("label", "Texto visible del enlace");
+      const text = node("input");
+      text.type = "text";
+      text.maxLength = 300;
+      text.dataset.ctaField = "text";
+      text.placeholder = "Pendiente de definir";
+      text.value = link.text || "";
+      textLabel.append(text);
+      grid.append(urlLabel, textLabel);
+      fieldset.append(grid);
+      fragment.append(fieldset);
+    });
+    $("destination-cta-fields").replaceChildren(fragment);
+  }
+
+  async function loadDestinationCtas(id) {
+    const sequence = ++state.ctaSequence;
+    state.ctaData = null;
+    state.ctaLoading = Boolean(id);
+    $("destination-cta-controls").disabled = true;
+    $("destination-cta-fields").replaceChildren();
+    message("destination-cta-error", "");
+    message("destination-cta-status", id ? "Consultando enlaces CTA…" : "Guarde o seleccione un destino para gestionar sus enlaces CTA.");
+    if (!id) return;
+    try {
+      const data = await panel.api(`/api/generation/destinations/${encodeURIComponent(id)}/ctas`);
+      if (sequence !== state.ctaSequence) return;
+      state.ctaData = data;
+      renderDestinationCtas(data);
+      message("destination-cta-status", data.editable
+        ? "Enlaces guardados localmente. Dejar un campo vacío no inventa una URL ni un texto."
+        : (data.blockers || []).join(" "));
+    } catch (error) {
+      if (sequence === state.ctaSequence) message("destination-cta-error", error.message);
+    } finally {
+      if (sequence === state.ctaSequence) {
+        state.ctaLoading = false;
+        $("destination-cta-controls").disabled = state.saving || !state.ctaData?.editable;
+      }
+    }
+  }
+
+  async function saveDestinationCtas(event) {
+    event.preventDefault();
+    if (state.saving || state.ctaLoading || !state.ctaData?.editable) return;
+    const id = state.destinationId;
+    const links = {};
+    $("destination-cta-fields").querySelectorAll("[data-cta]").forEach((fieldset) => {
+      links[fieldset.dataset.cta] = {
+        url: fieldset.querySelector('[data-cta-field="url"]').value.trim(),
+        text: fieldset.querySelector('[data-cta-field="text"]').value.trim(),
+      };
+    });
+    setSaving(true);
+    message("destination-cta-error", "");
+    try {
+      state.ctaData = await panel.api(`/api/generation/destinations/${encodeURIComponent(id)}/ctas`, {
+        method: "PUT", body: JSON.stringify({ cta_links: links }),
+      });
+      renderDestinationCtas(state.ctaData);
+      message("destination-cta-status", "Enlaces CTA guardados. Se usarán en los próximos envíos; las entradas de WordPress existentes no se han modificado.");
+      window.dispatchEvent(new CustomEvent("panel:ctas-updated", { detail: { destinationId: id, source: "generation" } }));
+    } catch (error) { message("destination-cta-error", error.message); }
+    finally { setSaving(false); }
   }
 
   function fillPrompt(id) {
@@ -134,15 +217,7 @@
     fillDestination(state.destinationId);
     fillPrompt(state.promptId);
     fillConfiguration(state.configurationId);
-    const reference = catalog.model_reference || {};
-    const models = reference.models || [];
-    options($("adapt-model"), [...models.map((model) => ({id: model.id, label: model.label})), {id: "custom", label: "Otro modelo GPT…"}], "Usar el modelo de cada configuración", "");
-    $("gpt-model-options").replaceChildren(...models.map((model) => {
-      const option = node("option", model.label);
-      option.value = model.id;
-      return option;
-    }));
-    $("adapt-model-reference").textContent = `Opciones de referencia revisadas el ${reference.checked_at || "—"}. La disponibilidad y las tarifas se comprobarán al activar las pruebas; elegir un modelo ahora no lo ejecuta.`;
+    window.dispatchEvent(new CustomEvent("generation:catalog"));
   }
 
   async function loadCatalog({ force = false } = {}) {
@@ -173,6 +248,7 @@
 
   function setSaving(value) {
     state.saving = value;
+    $("destination-cta-controls").disabled = value || state.ctaLoading || !state.ctaData?.editable;
     ["destination", "prompt", "configuration"].forEach((kind) => {
       $(`${kind}-controls`).disabled = value;
       $(`${kind}-picker`).disabled = value;
@@ -191,7 +267,7 @@
       });
       state[`${kind}Id`] = saved.id || saved[kind]?.id || id;
       await loadCatalog({ force: true });
-      message("generation-notice", kind === "prompt" ? "Prompt guardado. Las configuraciones conservan la versión que ya tenían seleccionada." : kind === "configuration" ? "Configuración guardada para preparar artículos. La generación sigue deshabilitada." : "Destino guardado. Las preparaciones anteriores conservan sus datos originales.");
+      message("generation-notice", kind === "prompt" ? "Prompt guardado. Las configuraciones conservan la versión que ya tenían seleccionada." : kind === "configuration" ? "Configuración guardada. Seleccione artículos para preparar o generar una adaptación." : "Destino guardado. Las preparaciones anteriores conservan sus datos originales.");
     } catch (error) { message("generation-error", error.message); }
     finally { setSaving(false); }
   }
@@ -223,6 +299,7 @@
       warningList(label.querySelector(".choice-warnings"), (configuration.warnings || []).filter((warning) => !chosen || warning !== "Falta elegir un modelo."));
     });
     $("adapt-dialog").setAttribute("aria-busy", String(state.dialogBusy));
+    window.dispatchEvent(new CustomEvent("generation:selection"));
   }
 
   function renderChoices() {
@@ -438,6 +515,12 @@
       enabled: $("destination-enabled").checked,
     });
   });
+  $("destination-cta-form").addEventListener("submit", saveDestinationCtas);
+  window.addEventListener("panel:ctas-updated", (event) => {
+    if (event.detail.source !== "generation" && String(event.detail.destinationId) === String(state.destinationId)) {
+      loadDestinationCtas(state.destinationId);
+    }
+  });
   $("prompt-form").addEventListener("submit", (event) => {
     event.preventDefault();
     save("prompt", "prompts", {
@@ -468,4 +551,10 @@
   $("save-preparation").addEventListener("click", () => prepare("save"));
   $("refresh-plans").addEventListener("click", () => loadPlans().catch((error) => message("generation-error", error.message)));
   $("configuration-prompt-detail").addEventListener("toggle", loadSavedPrompt);
+  window.ETGeneration = {
+    selection: () => ({article_ids: [...state.articleIds], configuration_ids: selectedConfigurationIds(), model: selectedModel()}),
+    busy: () => state.dialogBusy,
+    setBusy: (busy) => { state.dialogBusy = busy; syncDialog(); },
+    openDialog,
+  };
 })();

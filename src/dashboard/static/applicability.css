@@ -1,0 +1,23 @@
+#applicability-panel { padding: 20px; margin-bottom: 18px; }
+#applicability-panel h3 { margin: 4px 0 0; font-size: 14px; }
+#applicability-panel fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+#applicability-panel .applicability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#applicability-panel .applicability-selection { grid-template-columns: minmax(110px, 1fr) minmax(220px, 3fr); }
+#applicability-panel .applicability-stack { display: grid; gap: 14px; }
+#applicability-panel .actions { margin-top: 12px; }
+#applicability-context { padding: 12px; background: var(--soft); border-radius: 5px; }
+#applicability-context p:first-child { margin-top: 0; }
+#applicability-context p:last-child { margin-bottom: 0; }
+#applicability-panel .applicability-entry { border: 1px solid var(--line); border-radius: 5px; padding: 12px; margin-top: 10px; }
+#applicability-panel .applicability-entry legend { padding: 0 5px; font-size: 12px; font-weight: 600; }
+#applicability-panel .applicability-entry > label { margin-top: 10px; }
+#applicability-panel .applicability-entry > button { margin-top: 10px; }
+#applicability-panel .applicability-entry .applicability-evidence-grid { grid-template-columns: minmax(0, 3fr) minmax(140px, 1fr); }
+#applicability-panel .applicability-status { font-weight: 600; }
+#applicability-panel .applicability-help { margin: 0; }
+#applicability-panel .notice { margin-top: 12px; }
+@media (max-width: 720px) {
+  #applicability-panel .applicability-grid,
+  #applicability-panel .applicability-entry .applicability-evidence-grid { grid-template-columns: minmax(0, 1fr); }
+  #applicability-panel .section-title { align-items: flex-start; flex-direction: column; }
+}

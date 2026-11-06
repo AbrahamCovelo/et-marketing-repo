@@ -18,7 +18,7 @@ import unicodedata
 from src.extraction.db_manager import Database
 
 
-DATE_FIELDS = frozenset({"published_at", "modified_at", "captured_at"})
+DATE_FIELDS = frozenset({"published_at", "modified_at", "captured_at", "last_adapted_at"})
 _MAX_SQLITE_ID = 2**63 - 1
 # Bogotá has no daylight-saving change in the period covered by this corpus.
 BOGOTA = timezone(timedelta(hours=-5), "America/Bogota")
@@ -33,6 +33,7 @@ _SORTS = {
     "modified_desc": "v.modified_at IS NULL, v.modified_at DESC, a.id DESC",
     "captured_desc": "v.captured_at DESC, a.id DESC",
     "title_asc": "fold_text(v.title) ASC, a.id ASC",
+    "adapted_desc": "adapted.last_adapted_jd IS NULL, adapted.last_adapted_jd DESC, a.id DESC",
 }
 
 
@@ -76,7 +77,7 @@ def source_calendar_date(value: str | None, date_field: str = "published_at") ->
         return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if date_field == "captured_at":
+        if date_field in {"captured_at", "last_adapted_at"}:
             parsed = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
             return parsed.astimezone(BOGOTA).date().isoformat()
         return parsed.date().isoformat()
@@ -147,7 +148,8 @@ class Repository:
             return result
 
     def _article_query(self, q="", date_field="published_at", date_from=None,
-                       date_to=None, review="all", selected_only=False, sort="published_desc"):
+                       date_to=None, review="all", selected_only=False, sort="published_desc",
+                       adaptation="all", *, connection):
         if not isinstance(q, str) or len(q) > 500:
             raise ValueError("El texto de búsqueda debe tener hasta 500 caracteres.")
         if date_field not in DATE_FIELDS:
@@ -159,6 +161,8 @@ class Repository:
             raise ValueError("El filtro de selección debe ser booleano.")
         if sort not in _SORTS:
             raise ValueError("Orden no válido.")
+        if adaptation not in {'all', 'adapted', 'not_adapted'}:
+            raise ValueError('Filtro de adaptaciones no válido.')
         start, end = validate_date_range(date_from, date_to)
         q = q.strip()
         clauses: list[str] = []
@@ -166,35 +170,49 @@ class Repository:
         if q:
             clauses.append("instr(fold_text(v.title || char(10) || v.clean_text || char(10) || a.canonical_url), ?) > 0")
             parameters.append(_fold_text(q))
+        date_expression = 'adapted.last_adapted_at' if date_field == 'last_adapted_at' else f'v.{date_field}'
         if start:
-            clauses.append(f"article_date(v.{date_field}, ?) >= ?")
+            clauses.append(f"article_date({date_expression}, ?) >= ?")
             parameters.extend([date_field, start])
         if end:
-            clauses.append(f"article_date(v.{date_field}, ?) <= ?")
+            clauses.append(f"article_date({date_expression}, ?) <= ?")
             parameters.extend([date_field, end])
         if review != "all":
             clauses.append("v.review_required=?")
             parameters.append(int(review == "required"))
         if selected_only:
             clauses.append("s.article_id IS NOT NULL")
+        if adaptation != 'all':
+            clauses.append('adapted.article_id IS ' + ('NOT NULL' if adaptation == 'adapted' else 'NULL'))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         joins = """FROM source_articles a
             JOIN article_versions v ON a.current_version_id=v.id
             LEFT JOIN dashboard_selection s ON s.article_id=a.id"""
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'generation_trials' in tables:
+            excluded = (' AND NOT EXISTS (SELECT 1 FROM adaptation_deletions d WHERE d.trial_id=t.id)'
+                        if 'adaptation_deletions' in tables else '')
+            aggregate = f"""SELECT t.article_id,
+                MAX(julianday(COALESCE(t.completed_at,t.created_at))) AS last_adapted_jd,
+                strftime('%Y-%m-%dT%H:%M:%fZ',MAX(julianday(COALESCE(t.completed_at,t.created_at)))) AS last_adapted_at
+                FROM generation_trials t WHERE t.status='completed'{excluded} GROUP BY t.article_id"""
+        else:
+            aggregate = 'SELECT NULL AS article_id,NULL AS last_adapted_jd,NULL AS last_adapted_at WHERE 0'
+        joins += f' LEFT JOIN ({aggregate}) adapted ON adapted.article_id=a.id'
         return joins, where, parameters
 
     def list_articles(self, q: str = "", date_field: str = "published_at", date_from: str | None = None,
                       date_to: str | None = None, review: str = "all", selected_only: bool = False,
-                      page: int = 1, page_size: int = 25, sort: str = "published_desc") -> dict[str, Any]:
+                      page: int = 1, page_size: int = 25, sort: str = "published_desc", adaptation: str = 'all') -> dict[str, Any]:
         page = _positive_int(page, "La página", 1_000_000)
         page_size = _positive_int(page_size, "El tamaño de página", 100)
-        joins, where, parameters = self._article_query(q, date_field, date_from, date_to, review, selected_only, sort)
         with self._db() as db:
+            joins, where, parameters = self._article_query(q, date_field, date_from, date_to, review, selected_only, sort, adaptation, connection=db.connection)
             total = db.connection.execute(f"SELECT COUNT(*) {joins}{where}", parameters).fetchone()[0]
             pages = max(1, math.ceil(total / page_size))
             rows = db.connection.execute(f"""
                 SELECT a.id, v.title, a.canonical_url, v.published_at, v.modified_at,
-                       v.captured_at, v.word_count, v.review_required, a.current_version_id,
+                       v.captured_at, v.word_count, v.review_required, a.current_version_id, adapted.last_adapted_at,
                        s.article_id IS NOT NULL AS selected,
                        (SELECT COUNT(*) FROM article_versions av WHERE av.article_id=a.id) AS version_count,
                        substr(v.clean_text, 1, 220) AS snippet
@@ -207,11 +225,11 @@ class Repository:
 
     def select_matching(self, **filters) -> dict[str, int]:
         """Select all matching pages atomically using the same predicates as the list."""
-        if set(filters) - {"q", "date_field", "date_from", "date_to", "review", "selected_only", "sort"}:
+        if set(filters) - {"q", "date_field", "date_from", "date_to", "review", "selected_only", "sort", 'adaptation'}:
             raise ValueError("La selección por filtros contiene campos no admitidos.")
-        joins, where, parameters = self._article_query(**filters)
         with self._db() as db, db.connection:
             db.connection.execute("BEGIN IMMEDIATE")
+            joins, where, parameters = self._article_query(**filters, connection=db.connection)
             total = db.connection.execute(f"SELECT COUNT(*) {joins}{where}", parameters).fetchone()[0]
             if total > 5000:
                 raise ValueError("La selección admite hasta 5000 resultados. Reduzca el rango o aplique más filtros.")

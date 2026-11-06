@@ -104,6 +104,7 @@
       : "Las categorías deben corresponder a las que utiliza el listado de guías. El idioma y la inclusión en ese listado se comprobarán con el sitio antes de enviar artículos.";
     messages("deployment-blockers", item.blockers || []);
     ctaFields(item);
+    window.dispatchEvent(new CustomEvent('deployment:target', {detail: {targetId: item.id}}));
     syncControls();
   }
 
@@ -166,6 +167,7 @@
     try {
       await panel.api(`/api/deployment/targets/${encodeURIComponent(state.targetId)}`, { method: "PUT", body: JSON.stringify(payload) });
       await loadCatalog(true);
+      window.dispatchEvent(new CustomEvent("panel:ctas-updated", { detail: { destinationId: target()?.destination_id, source: "deployment" } }));
       message("deployment-notice", "Configuración guardada localmente. No se ha enviado nada a WordPress.");
     } catch (error) { message("deployment-error", error.message); }
     finally { state.busy = false; syncControls(); }
@@ -201,6 +203,9 @@
     const active = event.detail.name === "deployment";
     $("deployment-panel").hidden = !active;
     if (active) loadCatalog().catch((error) => message("deployment-error", error.message));
+  });
+  window.addEventListener("panel:ctas-updated", (event) => {
+    if (event.detail.source !== "deployment") state.catalog = null;
   });
   $("deployment-picker").addEventListener("change", () => {
     message("deployment-error", "");

@@ -81,7 +81,7 @@ Directrices Estrictas:
 
 
 4. Procesamiento en Python: Inyección de CTAs
-Una vez que Gemini devuelve el código HTML con las etiquetas como `[CTA_IMMIGRATION_EN]`, el script de Python las reemplazará antes de enviarlas a WordPress.
+Una vez que chatgpt devuelve el código HTML con las etiquetas como `[CTA_IMMIGRATION_EN]`, el script de Python las reemplazará antes de enviarlas a WordPress.
 # Ejemplo de reemplazo en Python post-generación:
 cta_links = {
    "[CTA_IMMIGRATION_EN]": "<div class='cta-box'><a href='https://canadiansinspain.com/immigration-services'>Need help with your Spanish visa? Book a consultation with our immigration experts today.</a></div>",

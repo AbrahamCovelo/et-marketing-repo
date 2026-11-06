@@ -4,12 +4,23 @@ from .repository import _id, _text
 
 
 def preview_draft(repository, request):
-    if not isinstance(request, dict) or set(request) != {"target_id", "title", "html", "excerpt", "featured_media"}:
+    fields = {"target_id", "title", "html", "excerpt", "featured_media"}
+    if not isinstance(request, dict) or not fields <= set(request) or set(request) - fields - {"category_ids"}:
         raise ValueError("Se requieren destino, título, HTML, extracto e imagen destacada.")
     target = repository.get_target(_id(request["target_id"]))
     title = _text(request["title"], "El título", 300)
     excerpt = _text(request["excerpt"], "El extracto", 5000)
     errors = list(target["blockers"])
+    categories = request.get("category_ids", [])
+    if not isinstance(categories, list) or len(categories) > 50:
+        raise ValueError("Seleccione hasta 50 categorías para este artículo.")
+    categories = sorted({_id(value) for value in categories})
+    policy = target.get("category_policy") or {}
+    if not categories:
+        errors.append("Seleccione las categorías de esta adaptación; la lista del destino no se aplica a todos los artículos.")
+    elif (not set(categories) <= set(policy.get("allowed_category_ids", []))
+          or policy.get("excluded_default_category_id") in categories):
+        errors.append("Las categorías elegidas deben estar permitidas en el catálogo de WordPress.")
     if not title or any(char in title for char in '<>'):
         errors.append("El título debe ser texto sin etiquetas HTML y no puede quedar vacío.")
     if any(char in excerpt for char in '<>'):
@@ -27,6 +38,6 @@ def preview_draft(repository, request):
         "La ruta del catálogo no fija la URL del artículo; WordPress decide su enlace permanente."]
     ready = not errors and result["ready"]
     payload = {"status": "draft", "title": title, "content": result["content"], "excerpt": excerpt,
-               "featured_media": media, "categories": target["category_ids"]} if ready else None
+               "featured_media": media, "categories": categories} if ready else None
     return {"ready": ready, "execution_enabled": False, "errors": errors, "warnings": warnings,
             "payload": payload, "target": target}

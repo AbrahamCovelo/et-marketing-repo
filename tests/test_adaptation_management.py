@@ -30,7 +30,7 @@ class Remote(Session):
         self.remote = {'id': 1510, 'status': remote_status, 'modified_gmt': '2026-11-05T00:00:00',
                        'content': {'raw': 'Remote content'}, 'title': {'raw': 'Remote title'},
                        'featured_media': 1369, 'categories': [19, 23]}
-        self.post_body = {'id': 1510, 'status': remote_status, 'featured_media': 1369}
+        self.post_body = {'id': 1510, 'status': remote_status, 'featured_media': 1369, 'categories': [19, 23]}
         self.post_http = post_http
         self.post_error = post_error
 
@@ -79,7 +79,7 @@ def test_preview_read_only_then_update_same_post_without_duplicate(deployed):
 
 def test_missing_post_creates_only_draft_and_next_preview_uses_new_id(deployed):
     remote = Remote(post_http=404)
-    remote.post_body = {'id': 1600, 'status': 'draft', 'featured_media': 1369}
+    remote.post_body = {'id': 1600, 'status': 'draft', 'featured_media': 1369, 'categories': [19, 23]}
     checked = preview(deployed, remote)
     assert checked['mode'] == 'create' and checked['post_id'] is None
     assert execute(deployed, remote, checked)['result']['post_id'] == 1600
@@ -202,8 +202,10 @@ def test_delete_purges_all_database_copies_but_preserves_source_and_history(depl
         assert db.execute('SELECT payload_json FROM deployment_trials').fetchone()[0] == '{}'
         assert db.execute('SELECT payload_json FROM adaptation_actions').fetchone()[0] == '{}'
     history = GenerationRepository(path).article_history(1)
-    assert history['generated_count'] == 0 and history['deleted_count'] == 1
-    assert history['trials'][0]['deleted_at']
+    assert history['generated_count'] == 0 and history['trials'] == []
+    assert history['message'] == 'Todavía no hubo adaptaciones.'
+    with pytest.raises(KeyError):
+        GenerationRepository(path).trial_detail(1)
     assert GenerationRepository(path).article_summaries([1])[1]['generated_count'] == 0
     assert delete_adaptation(path, 1)['deleted']
     with pytest.raises(ValueError, match='eliminado'):
@@ -241,8 +243,7 @@ def test_api_requires_csrf_and_explicit_boolean_and_hides_deleted_text(deployed)
     assert client.delete(url, json={'confirm': 1}, headers=headers).status_code == 400
     assert client.delete(url, json={'confirm': True}, headers={**headers, 'Origin': 'https://evil.example'}).status_code == 403
     assert client.delete(url, json={'confirm': True}, headers=headers).status_code == 200
-    detail = client.get(url).json
-    assert detail['html'] == '' and detail['deleted_at']
+    assert client.get(url).status_code == 404
     assert client.get('/api/articles/1').json['adaptations']['generated_count'] == 0
     assert client.post('/api/generation/execute', json={}, headers=headers).status_code == 409
     assert client.post('/api/deployment/execute', json={}, headers=headers).status_code == 409

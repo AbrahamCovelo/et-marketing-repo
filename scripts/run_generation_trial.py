@@ -52,6 +52,7 @@ def export_trial(trial, *, title, image_url=None, featured_media=None, output_di
         "id", "run_key", "article_id", "source_version_id", "configuration_id",
         "configuration_version_id", "prompt_version_id", "destination_id", "model",
         "response_model", "status", "usage", "created_at", "completed_at",
+        "html_source", "edit_version", "edited_at", "content_revision", "normalization",
     )}
     metadata.update({
         "title": title, "excerpt": excerpt, "image_url": image_url,

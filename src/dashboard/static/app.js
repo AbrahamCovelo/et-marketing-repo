@@ -155,6 +155,7 @@
     return new URLSearchParams({
       q: $("search-query").value.trim(), date_field: $("date-field").value,
       date_from: from, date_to: to, review: $("review-filter").value,
+      adaptation: $('adaptation-filter').value,
       selected_only: String($("selected-only").checked), page: String(state.page),
       page_size: "25", sort: $("sort-order").value,
     });
@@ -231,6 +232,7 @@
       if (item.id === state.currentId) open.setAttribute("aria-current", "true");
       open.append(node("span", item.title, "article-name"));
       open.append(node("span", `Publicado ${sourceDate(item.published_at)} · Modificado ${sourceDate(item.modified_at)}`, "article-dates"));
+      if (item.last_adapted_at) open.append(node('span', `Última adaptación: ${capturedDate(item.last_adapted_at)} · Bogotá`, 'article-dates'));
       const badges = node("span", null, "article-badges");
       badges.append(node("span", `${number.format(item.word_count || 0)} palabras`));
       if (item.review_required) badges.append(node("span", "Con avisos de revisión", "review-mark"));
@@ -399,7 +401,7 @@
         const history = detail.adaptations || {};
         const items = history.items || [];
         value = history.message || "Todavía no hubo adaptaciones.";
-        const trials = history.trials || [];
+        const trials = (history.trials || []).filter((trial) => !trial.deleted_at);
         if (trials.length) {
           const trialLabels = {
             completed: "Generada · pendiente de revisión editorial", incomplete: "Incompleta",
@@ -407,11 +409,11 @@
           };
           value += "\n\nPRUEBAS DE ADAPTACIÓN\n\n" + trials.map((trial) => [
             `Prueba #${trial.id} · ${trial.configuration_name} · ${trial.destination_name}`,
-            `Estado: ${trial.deleted_at ? "Contenido eliminado de la base local" : trialLabels[trial.status] || trial.status}`,
+            `Estado: ${trialLabels[trial.status] || trial.status}`,
             `Modelo: ${trial.model} · ${capturedDate(trial.created_at)}`,
             `Configuración v${trial.configuration_version} · Versión de origen #${trial.source_version_id}`,
-            `Tokens de entrada: ${trial.usage?.input_tokens ?? "—"} · salida: ${trial.usage?.output_tokens ?? "—"}`,
-            `WordPress: ${deploymentLabel(trial.deployment)}`,
+            ...trialConsumptionLines(trial),
+            `WordPress · último envío registrado: ${deploymentLabel(trial.deployment)}. El estado actual se comprueba al volver a desplegar.`,
           ].join("\n")).join("\n\n");
           renderTrialResults(trials);
         }
@@ -436,7 +438,7 @@
             ].join("\n");
           }).join("\n\n────────────────────────────────────────\n\n");
         }
-        help = "Las pruebas generadas conservan su resultado para revisión editorial. Los resultados incompletos no cuentan como adaptaciones. Guardar una preparación no genera contenido; la ejecución en masa sigue deshabilitada.";
+        help = "Las adaptaciones conservan su resultado para revisión editorial. Los resultados incompletos no cuentan como adaptaciones. Guardar una preparación no genera contenido; «Generar con API» inicia explícitamente el lote seleccionado.";
         break;
       }
       default:
@@ -448,10 +450,33 @@
     $("article-text").scrollTop = 0;
   }
 
+  function trialConsumptionLines(trial) {
+    const summary = trial.usage_summary;
+    if (!summary) return ['Consumo completo pendiente de consultar. Actualice el panel.'];
+    const usd = (value) => value == null ? 'no calculable' : `USD ${Number(value).toFixed(6)}`;
+    const range = (value) => value.estimated_cost_usd_min === value.estimated_cost_usd_max
+      ? usd(value.estimated_cost_usd_min)
+      : `${usd(value.estimated_cost_usd_min)}–${usd(value.estimated_cost_usd_max)}`;
+    const lines = summary.records.flatMap((record) => {
+      const u = record.usage_fields;
+      return [
+        `${record.stage === 'assessment' ? 'Evaluación e investigación' : 'Redacción'}: entrada ${u.entrada ?? 'sin dato'} · salida ${u.salidaTotal ?? 'sin dato'} · total ${u.tokensTotales ?? 'sin dato'} tokens`,
+        `  Caché leída ${u.entradaCache ?? 'sin dato'} · escrita ${u.escrituraCache ?? 'sin dato'} · razonamiento ${u.razonamiento ?? 'sin dato'} · búsquedas completas ${record.web_search.completed_searches} · coste estimado ${range(record.cost)}`,
+      ];
+    });
+    const totals = summary.totals, u = totals.usage_fields;
+    lines.push(`TOTAL ${summary.complete ? 'DE LA PRUEBA' : 'PARCIAL'} (${totals.calls} solicitudes): entrada ${u.entrada} · salida ${u.salidaTotal} · total ${u.tokensTotales} tokens`,
+      `COSTE TOTAL ESTIMADO: ${range(totals)}. Incluye las búsquedas registradas.`,
+      'La caché forma parte de la entrada y el razonamiento forma parte de la salida; no se suman dos veces.');
+    if (!summary.complete) lines.push(summary.notice);
+    return lines;
+  }
+
   function renderTrialResults(trials) {
     const container = node("div");
     container.id = "trial-results";
     for (const trial of trials) {
+      if (trial.deleted_at) continue;
       container.append(node("h3", `Adaptación #${trial.id} · ${trial.destination_name}`));
       const editorUrl = safeWordPressEditorUrl(trial.deployment?.editor_url);
       if (editorUrl) {
@@ -463,12 +488,14 @@
         paragraph.append(link);
         container.append(paragraph);
       }
-      if (trial.deleted_at) {
-        container.append(node("p", `Contenido local eliminado el ${capturedDate(trial.deleted_at)}. Se conserva el registro del intento; WordPress no se modificó.`));
-        continue;
-      }
       const controls = node("div", undefined, "adaptation-actions");
       const blocked = ["running", "unknown"].includes(trial.status) || ["running", "sending", "unknown"].includes(trial.deployment?.status);
+      const edit = node("button", "Editar texto");
+      edit.type = "button";
+      edit.dataset.adaptationAction = "edit";
+      edit.dataset.unavailable = String(blocked || trial.status !== "completed");
+      edit.disabled = adaptationBusy || edit.dataset.unavailable === "true";
+      edit.addEventListener("click", () => editAdaptation(trial));
       const resend = node("button", "Volver a desplegar");
       resend.type = "button";
       resend.dataset.adaptationAction = "redeploy";
@@ -481,8 +508,14 @@
       remove.dataset.unavailable = String(blocked);
       remove.disabled = adaptationBusy || blocked;
       remove.addEventListener("click", () => deleteAdaptation(trial));
-      controls.append(resend, remove);
+      const categories = node('button', 'Revisar categorías');
+      categories.type = 'button';
+      categories.disabled = blocked;
+      categories.addEventListener('click', () => window.ETCategories.openTrial(trial.id));
+      controls.append(edit, categories, resend, remove);
       container.append(controls);
+      if (trial.edited_at) container.append(node("p", `Texto editado localmente el ${capturedDate(trial.edited_at)} · versión ${trial.edit_version}. Use «Volver a desplegar» para enviar los cambios a WordPress.`));
+      else if (trial.html_source === "normalized") container.append(node("p", "Formato HTML ajustado automáticamente. El texto se conserva y la salida original de la API permanece guardada."));
       if (blocked) container.append(node("p", "Hay una operación en curso o incierta. Compruebe su resultado antes de volver a actuar."));
       else if (!trial.deployment?.post_id) container.append(node("p", "El reenvío necesita un primer despliegue con título, imagen y entrada identificados."));
       if (trial.deployment?.error) container.append(node("p", trial.deployment.error));
@@ -518,9 +551,73 @@
     });
   }
 
+  async function editAdaptation(trial) {
+    if (adaptationBusy) return;
+    setAdaptationBusy(true);
+    clearError();
+    let saved;
+    try {
+      saved = await api(`/api/generation/trials/${trial.id}`);
+    } catch (error) { showError(error.message); }
+    finally { setAdaptationBusy(false); }
+    if (!saved) return;
+    const dialog = node("dialog", undefined, "adaptation-dialog");
+    const heading = node("h2", `Editar adaptación #${trial.id}`);
+    heading.id = "adaptation-edit-title";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    dialog.append(heading, node("p", "Edite el texto conservando sus etiquetas HTML (<p>, <h2>, <strong>…). Guardar actualiza la copia local; el envío a WordPress se realiza con «Volver a desplegar»."));
+    const label = node("label", "Contenido HTML");
+    const content = node("textarea");
+    content.id = "adaptation-edit-content";
+    content.rows = 20;
+    content.cols = 80;
+    content.maxLength = 500000;
+    content.value = saved.html;
+    label.htmlFor = content.id;
+    const feedback = node("p");
+    feedback.setAttribute("role", "status");
+    const controls = node("div", undefined, "adaptation-actions");
+    const cancel = node("button", "Cancelar");
+    const save = node("button", "Guardar texto");
+    cancel.type = save.type = "button";
+    controls.append(cancel, save);
+    dialog.append(label, content, feedback, controls);
+    let saving = false;
+    cancel.addEventListener("click", () => dialog.close());
+    dialog.addEventListener("cancel", (event) => { if (saving) event.preventDefault(); });
+    dialog.addEventListener("close", () => dialog.remove());
+    save.addEventListener("click", async () => {
+      if (saving) return;
+      saving = true;
+      save.disabled = cancel.disabled = content.disabled = true;
+      setAdaptationBusy(true);
+      feedback.textContent = "Guardando texto…";
+      let success = false;
+      try {
+        await api(`/api/generation/trials/${trial.id}/content`, {
+          method: "PUT", body: JSON.stringify({ html: content.value, revision: saved.content_revision }),
+        });
+        success = true;
+        notice("Texto guardado en la base local. Puede enviarlo con «Volver a desplegar».");
+      } catch (error) { feedback.textContent = error.message; }
+      finally {
+        saving = false;
+        save.disabled = cancel.disabled = content.disabled = false;
+        if (success) {
+          dialog.close();
+          await window.ETPanel.refreshArticles();
+        }
+        setAdaptationBusy(false);
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    content.focus();
+  }
+
   async function deleteAdaptation(trial) {
     if (adaptationBusy) return;
-    if (!window.confirm(`¿Borrar el contenido de la adaptación #${trial.id} de la base local?\n\nSe eliminarán el HTML y sus copias guardadas en la base. Esta acción no se puede deshacer desde el panel. Se conservarán IDs, consumo e historial mínimo.\n\nWordPress, el artículo original y los archivos exportados no cambiarán.`)) return;
+    if (!window.confirm(`¿Borrar la adaptación #${trial.id} de la base local?\n\nSe eliminarán el HTML y sus ediciones, y la adaptación desaparecerá del panel. Esta acción no se puede deshacer desde el panel.\n\nWordPress, el artículo original y los archivos exportados no cambiarán.`)) return;
     setAdaptationBusy(true);
     clearError();
     try {
@@ -806,9 +903,11 @@
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(applyFilters, 300);
   });
-  ["date-field", "date-from", "date-to", "review-filter", "sort-order", "selected-only"].forEach((id) => {
+  ["date-field", "date-from", "date-to", "review-filter", "sort-order", "selected-only", 'adaptation-filter'].forEach((id) => {
     $(id).addEventListener("change", () => {
-      $("date-help").textContent = $("date-field").value === "captured_at"
+      $("date-help").textContent = $('date-field').value === 'last_adapted_at'
+        ? 'El rango usa la adaptación completa más reciente que se conserva localmente, en hora de Bogotá. No incluye intentos fallidos ni contenido borrado.'
+        : $("date-field").value === "captured_at"
         ? "El rango incluye ambos días y se consulta en la zona horaria de Bogotá. La extracción de versión no es la publicación ni la última comprobación del sitio."
         : "Los extremos del rango se incluyen. Las fechas de publicación y modificación corresponden al sitio original.";
       applyFilters();
@@ -858,6 +957,7 @@
   syncScrapeScope();
   window.ETPanel = {
     api, selectedIds, showError, notice, capturedDate,
+    currentArticleId: () => state.currentId,
     refreshArticles: async () => {
       const tasks = [loadSummary(), loadList()];
       if (state.currentId !== null) tasks.push(loadDetail(state.currentId, { keepTab: true }));

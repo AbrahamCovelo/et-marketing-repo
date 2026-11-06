@@ -10,10 +10,13 @@ import time
 import requests
 
 from src.generation.trial import get_trial
+from src.generation.content_edits import effective_content
 from .content import prepare_wordpress_content, validate_semantic_html
 from .repository import CTA_NAMES, DeploymentRepository, _id
 from .settings import load_credentials
 from .trial import get_deployment_trial, _same_origin
+from .categories import validate_category_selection
+from .trial_categories import assert_category_state, trial_category_selection
 
 
 class AdaptationConflict(ValueError):
@@ -30,6 +33,10 @@ def _json(value):
 
 def initialize_management(db_path):
     with closing(sqlite3.connect(db_path)) as db, db:
+        db.execute("""CREATE TABLE IF NOT EXISTS adaptation_edits (
+            id INTEGER PRIMARY KEY, trial_id INTEGER NOT NULL REFERENCES generation_trials(id),
+            version INTEGER NOT NULL CHECK(version>0), html TEXT NOT NULL,
+            created_at TEXT NOT NULL, UNIQUE(trial_id,version))""")
         db.execute("""CREATE TABLE IF NOT EXISTS adaptation_deletions (
             trial_id INTEGER PRIMARY KEY REFERENCES generation_trials(id), deleted_at TEXT NOT NULL)""")
         db.execute("""CREATE TABLE IF NOT EXISTS adaptation_actions (
@@ -46,6 +53,40 @@ def initialize_management(db_path):
 def _assert_idle(db, trial_id):
     if db.execute("SELECT 1 FROM adaptation_actions WHERE trial_id=? AND status IN ('running','unknown')", (trial_id,)).fetchone():
         raise AdaptationConflict("Hay un envío en curso o de resultado incierto. Compruebe ese intento antes de continuar.")
+
+
+def save_adaptation_content(db_path, trial_id, *, html, revision):
+    """Save a validated editorial revision locally, using optimistic concurrency."""
+    _id(trial_id)
+    if not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{64}', revision):
+        raise ValueError("Cargue la adaptación antes de guardar sus cambios.")
+    validation = validate_semantic_html(html)
+    if not validation['valid']:
+        raise ValueError("No se guardó el contenido: " + " ".join(validation['errors']))
+    initialize_management(db_path)
+    with closing(sqlite3.connect(db_path, timeout=30)) as db, db:
+        db.row_factory = sqlite3.Row
+        db.execute('PRAGMA foreign_keys=ON')
+        db.execute('BEGIN IMMEDIATE')
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        row = db.execute("""SELECT t.html,t.status,d.locale FROM generation_trials t
+            JOIN generation_destinations d ON d.id=t.destination_id WHERE t.id=?""", (trial_id,)).fetchone() if 'generation_trials' in tables else None
+        if not row or db.execute('SELECT 1 FROM adaptation_deletions WHERE trial_id=?', (trial_id,)).fetchone():
+            raise KeyError(trial_id)
+        if row['status'] != 'completed':
+            raise AdaptationConflict("Solo se puede editar una adaptación completa.")
+        _assert_idle(db, trial_id)
+        if 'deployment_trials' in tables and db.execute("SELECT 1 FROM deployment_trials WHERE generation_trial_id=? AND status IN ('sending','unknown')", (trial_id,)).fetchone():
+            raise AdaptationConflict("Hay un envío en curso o pendiente de comprobar.")
+        if set(validation['cta_markers']) - set(CTA_NAMES.get(row['locale'], ())):
+            raise ValueError("Los marcadores CTA no corresponden al idioma de esta adaptación.")
+        current = effective_content(db, trial_id, row['html'])
+        if current['content_revision'] != revision:
+            raise AdaptationConflict("La adaptación cambió desde que la abrió. Recargue el contenido antes de guardar.")
+        if current['html'] != html:
+            db.execute('INSERT INTO adaptation_edits(trial_id,version,html,created_at) VALUES (?,?,?,?)',
+                       (trial_id, current['edit_version'] + 1, html, _now()))
+        return {'trial_id': trial_id, **effective_content(db, trial_id, row['html'])}
 
 
 def delete_adaptation(db_path, trial_id):
@@ -73,6 +114,11 @@ def delete_adaptation(db_path, trial_id):
         if 'deployment_trials' in tables:
             db.execute("UPDATE deployment_trials SET payload_json='{}',warnings_json='[]',error='' WHERE generation_trial_id=?", (trial_id,))
         db.execute("UPDATE adaptation_actions SET payload_json='{}',error='' WHERE trial_id=?", (trial_id,))
+        db.execute('DELETE FROM adaptation_edits WHERE trial_id=?', (trial_id,))
+        if 'generation_html_formats' in tables:
+            db.execute('DELETE FROM generation_html_formats WHERE trial_id=?', (trial_id,))
+        if 'adaptation_category_overrides' in tables:
+            db.execute('DELETE FROM adaptation_category_overrides WHERE trial_id=?', (trial_id,))
         db.execute("INSERT INTO adaptation_deletions(trial_id,deleted_at) VALUES (?,?)", (trial_id, _now()))
     return {"trial_id": trial_id, "deleted": True}
 
@@ -142,10 +188,6 @@ def _prepare(db_path, trial_id, env_path, client):
     if not isinstance(saved.get('title'), str) or not saved['title'].strip() or len(saved['title']) > 300 or any(c in saved['title'] for c in '<>'):
         raise ValueError("El envío anterior no tiene un título válido.")
     media_id = _id(saved.get('featured_media'))
-    categories = saved.get('categories')
-    if not isinstance(categories, list) or len(categories) > 50:
-        raise ValueError("Las categorías guardadas no son válidas.")
-    categories = sorted({_id(c) for c in categories})
     validation = validate_semantic_html(trial['html'])
     if not validation['valid'] or set(validation['cta_markers']) - set(CTA_NAMES[target['locale']]):
         raise ValueError("La adaptación no supera la validación de HTML o idioma de los CTA.")
@@ -165,13 +207,23 @@ def _prepare(db_path, trial_id, env_path, client):
         raise ValueError("No se pudo confirmar la entrada. Si está en la papelera, restáurela en WordPress antes de reenviar.")
     if pending and remote_status not in (None, 'draft'):
         raise ValueError("Hay CTA pendientes. Configure sus enlaces antes de actualizar una entrada que no sea borrador.")
+    selection = trial_category_selection(db_path, trial_id, target['id'])
+    if selection['category_ids']:
+        categories, category_snapshot = selection['category_ids'], selection['context']
+    else:
+        # Preserve categories assigned in WordPress instead of replaying an old
+        # empty delivery list, which would reset the post to its default term.
+        categories = remote.get('categories') if remote is not None else saved.get('categories')
+        category_snapshot = None
+    try:
+        category_check = validate_category_selection(db_path, target['id'], categories,
+            context=category_snapshot, env_path=env_path, session=client, refresh=True)
+    except ValueError as error:
+        raise ValueError(str(error) + " Guarde las categorías de esta adaptación en el panel antes de volver a desplegar.") from None
+    categories = category_check['category_ids']
     media = _get(client, credentials, f'media/{media_id}', params={'context': 'edit'})
     if not isinstance(media, dict) or type(media.get('id')) is not int or media['id'] != media_id or not str(media.get('mime_type', '')).startswith('image/') or not _same_origin(media.get('source_url'), target['base_url']):
         raise ValueError("La imagen guardada ya no es válida en el destino.")
-    if categories:
-        found = _get(client, credentials, 'categories', params={'include': ','.join(map(str, categories)), 'per_page': 100})
-        if not isinstance(found, list) or any(not isinstance(c, dict) or type(c.get('id')) is not int for c in found) or {c['id'] for c in found} != set(categories):
-            raise ValueError("Las categorías guardadas no están disponibles en WordPress.")
     payload = {'title': saved['title'], 'content': prepared['content'] if not pending else trial['html'],
                'featured_media': media_id, 'categories': categories}
     if remote is None:
@@ -186,8 +238,13 @@ def _prepare(db_path, trial_id, env_path, client):
             value = remote.get(key)
             remote_state[key] = value.get('raw') if isinstance(value, dict) else value
     revision = hashlib.sha256(_json({'payload': payload, 'remote': remote_state, 'target_id': target['id'],
+                                     'category_selection_revision': selection['revision'],
+                                     'category_policy_revision': category_check['policy_revision'],
                                      'base_url': target['base_url'], 'prior_updated_at': deployment['updated_at']}).encode()).hexdigest()
     preview = {'trial_id': trial_id, 'revision': revision, 'mode': 'update' if remote is not None else 'create',
+               'content_revision': trial['content_revision'],
+               'category_selection_revision': selection['revision'],
+               'category_policy_revision': category_check['policy_revision'],
                'post_id': post_id if remote is not None else None, 'remote_status': remote_status,
                'title': payload['title'], 'featured_media': media_id, 'categories': categories,
                'pending_ctas': pending, 'live_update': remote_status in ('publish', 'future'),
@@ -248,6 +305,11 @@ def redeploy_adaptation(db_path, trial_id, *, request_key, revision, allow_pendi
             _assert_idle(db, trial_id)
             if db.execute('SELECT 1 FROM adaptation_deletions WHERE trial_id=?', (trial_id,)).fetchone():
                 raise AdaptationConflict("La adaptación fue borrada durante la comprobación.")
+            original = db.execute('SELECT html FROM generation_trials WHERE id=?', (trial_id,)).fetchone()
+            if not original or effective_content(db, trial_id, original[0])['content_revision'] != preview['content_revision']:
+                raise AdaptationConflict("El contenido local cambió durante la comprobación. Revise otra vez antes de enviar.")
+            assert_category_state(db, get_trial(db_path, trial_id), deployment['target_id'],
+                preview['category_selection_revision'], preview['category_policy_revision'])
             current = db.execute('SELECT updated_at FROM deployment_trials WHERE generation_trial_id=?', (trial_id,)).fetchone()
             latest = _latest_delivery(db, {'generation_trial_id': trial_id, 'updated_at': current[0] if current else None})
             if not current or latest['updated_at'] != deployment['updated_at']:
@@ -265,8 +327,12 @@ def redeploy_adaptation(db_path, trial_id, *, request_key, revision, allow_pendi
                 expected_status = preview['remote_status'] if preview['mode'] == 'update' else 'draft'
                 if (isinstance(data, dict) and type(data.get('id')) is int and data['id'] > 0
                         and (preview['mode'] == 'create' or data['id'] == preview['post_id'])
-                        and data.get('status') == expected_status and data.get('featured_media') == payload['featured_media']):
+                        and data.get('status') == expected_status and data.get('featured_media') == payload['featured_media']
+                        and isinstance(data.get('categories'), list)
+                        and all(type(value) is int for value in data['categories'])
+                        and sorted(set(data['categories'])) == payload['categories']):
                     result = {'post_id': data['id'], 'post_status': data['status'], 'featured_media': payload['featured_media'],
+                              'categories': payload['categories'],
                               'edit_url': f"{credentials.base_url}/wp-admin/post.php?post={data['id']}&action=edit"}
                     status, error = 'completed', ''
             elif 400 <= response.status_code < 500:

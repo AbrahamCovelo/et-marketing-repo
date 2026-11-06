@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "currency": "USD",
+  "checked_at": "2026-11-06",
+  "notice": "Estimación con tarifas públicas verificadas en esta fecha; no es una factura ni una consulta al consumo de la cuenta. No incluye impuestos, créditos ni descuentos particulares. Actualizar esta referencia para presupuestos futuros.",
+  "source_urls": [
+    "https://developers.openai.com/api/docs/pricing",
+    "https://developers.openai.com/api/docs/guides/prompt-caching",
+    "https://developers.openai.com/api/docs/guides/tools-web-search",
+    "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "https://developers.openai.com/api/docs/models/gpt-5-nano"
+  ],
+  "web_search_usd_per_call": "0.01",
+  "models": [
+    {
+      "ids": ["gpt-5.6-sol"],
+      "valid_until": "2026-11-30",
+      "maximum_input_tokens": 272000,
+      "tiers": {
+        "default": {"input": "4", "cached_input": "0.4", "cache_write_30m": "5", "cache_write_12h": "10", "output": "20"},
+        "flex": {"input": "2", "cached_input": "0.2", "cache_write_30m": "2.5", "cache_write_12h": "5", "output": "10"}
+      }
+    },
+    {
+      "ids": ["gpt-6-luna"],
+      "maximum_input_tokens": 272000,
+      "tiers": {
+        "default": {"input": "0.1", "cached_input": "0.01", "cache_write_30m": "0.125", "cache_write_12h": "0.25", "output": "0.5"},
+        "flex": {"input": "0.05", "cached_input": "0.005", "cache_write_30m": "0.0625", "cache_write_12h": "0.125", "output": "0.25"}
+      }
+    },
+    {
+      "ids": ["gpt-5-nano", "gpt-5-nano-2025-08-07"],
+      "maximum_input_tokens": 400000,
+      "tiers": {
+        "default": {"input": "0.05", "cached_input": "0.005", "output": "0.4"},
+        "flex": {"input": "0.025", "cached_input": "0.0025", "output": "0.2"}
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+.image-search-panel { padding: 20px; margin-top: 16px; }
+.image-search-panel > p { max-width: 1000px; }
+.image-search-panel fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.image-search-fields { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(240px, 2fr); gap: 14px; margin: 16px 0 12px; }
+.image-search-panel .notice { margin: 14px 0; }
+#image-query-suggestions { margin-top: 10px; }
+.image-candidates { display: grid; grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 16px; margin-top: 16px; }
+.image-candidate { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: white; }
+.image-candidate > img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: var(--soft); }
+.image-candidate-body { padding: 14px; }
+.image-candidate h3 { font-size: 14px; margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.image-candidate-links { font-size: 12px; }
+.image-candidate .check-label { align-items: start; margin: 14px 0; line-height: 1.4; }
+.image-candidate .check-label input { margin-top: 2px; }
+.image-candidate button { width: 100%; }
+@media (max-width: 640px) {
+  .image-search-fields { grid-template-columns: 1fr; }
+  .image-search-panel { padding: 15px; }
+  .image-candidates { grid-template-columns: 1fr; }
+}

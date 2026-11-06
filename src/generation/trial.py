@@ -19,6 +19,9 @@ import requests
 from .model_options import validate_model_override
 from .preparation import preview_preparation
 from .settings import _file_credentials
+from .applicability import require_review, review_instructions, ApplicabilityRequiredError
+from .content_edits import effective_content
+from .output_contract import OUTPUT_CONTRACT_VERSION, output_instructions
 
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS generation_trials (
@@ -75,6 +78,9 @@ def _read_rows(db_path, where="", params=()):
         records = [_record(row) for row in connection.execute(
             f"SELECT * FROM generation_trials {where} ORDER BY id DESC", params
         )]
+        for record in records:
+            record['original_html'] = record['html']
+            record.update(effective_content(connection, record['id'], record['html']))
         if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone():
             deleted = dict(connection.execute('SELECT trial_id,deleted_at FROM adaptation_deletions'))
             for record in records:
@@ -99,8 +105,8 @@ def list_trials(db_path, article_id=None):
     if article_id is not None:
         if type(article_id) is not int or article_id <= 0:
             raise ValueError("El artículo debe ser un identificador entero positivo.")
-        return _read_rows(db_path, "WHERE article_id=?", (article_id,))
-    return _read_rows(db_path)
+        return [record for record in _read_rows(db_path, "WHERE article_id=?", (article_id,)) if not record.get('deleted_at')]
+    return [record for record in _read_rows(db_path) if not record.get('deleted_at')]
 
 
 def _same_trial(record, article_id, configuration_id, model, service_tier):
@@ -155,7 +161,7 @@ def run_trial(db_path, article_id, configuration_id, model, run_key, *,
         raise ValueError("La prueba necesita una clave estable de hasta 160 caracteres, sin espacios.")
     if type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 16000:
         raise ValueError("El límite de salida debe estar entre 1 y 16.000 tokens.")
-    if reasoning_effort is not None and reasoning_effort not in {"minimal", "none", "low", "medium", "high"}:
+    if reasoning_effort is not None and (not isinstance(reasoning_effort, str) or reasoning_effort not in {"", "minimal", "none", "low", "medium", "high", "xhigh", "max", "ultra"}):
         raise ValueError("Nivel de razonamiento no admitido.")
     if service_tier not in {"flex", "default"}:
         raise ValueError("Nivel de servicio no admitido para la prueba.")
@@ -166,6 +172,7 @@ def run_trial(db_path, article_id, configuration_id, model, run_key, *,
 
     preview = preview_preparation(db_path, [article_id], [configuration_id], model)
     example = preview["example"]
+    applicability = require_review(db_path, article_id, configuration_id, expected_example=example)
     if not example["rendered_prompt"].strip() or not example["source_context"]["content"]["clean_text"].strip():
         raise ValueError("La prueba requiere un prompt y un artículo con contenido.")
     path = Path(env_path) if env_path is not None else Path(__file__).resolve().parents[2] / ".env"
@@ -174,14 +181,16 @@ def run_trial(db_path, article_id, configuration_id, model, run_key, *,
         raise ValueError("Falta la credencial de OpenAI para ejecutar la prueba.")
 
     payload = {
-        "model": model, "instructions": example["system_prompt"],
+        "model": model, "instructions": review_instructions(applicability) + example["system_prompt"] + output_instructions(preview["items"][0]["locale"]),
         "input": example["rendered_prompt"], "store": False,
         "max_output_tokens": max_output_tokens, "service_tier": service_tier,
     }
-    effort = reasoning_effort or ("minimal" if model == "gpt-5-nano" or model.startswith("gpt-5-nano-") else None)
+    effort = reasoning_effort if reasoning_effort is not None else ("minimal" if model == "gpt-5-nano" or model.startswith("gpt-5-nano-") else None)
     if effort:
         payload["reasoning"] = {"effort": effort}
-    snapshot = {"example": example, "item": preview["items"][0], "warnings": preview["warnings"]}
+    snapshot = {"example": example, "item": preview["items"][0], "warnings": preview["warnings"],
+                "output_contract_version": OUTPUT_CONTRACT_VERSION,
+                "applicability_review": applicability}
 
     # Fail before reserving/calling if the credential somehow appears in input.
     if credential in _json(payload) or credential in _json(snapshot):
@@ -194,7 +203,17 @@ def run_trial(db_path, article_id, configuration_id, model, run_key, *,
         connection.execute("CREATE INDEX IF NOT EXISTS generation_trials_article ON generation_trials(article_id,status)")
         existing = connection.execute("SELECT * FROM generation_trials WHERE run_key=?", (run_key,)).fetchone()
         if existing:
-            return _same_trial(_record(existing), article_id, configuration_id, model, service_tier)
+            record = _record(existing)
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone():
+                deleted = connection.execute('SELECT deleted_at FROM adaptation_deletions WHERE trial_id=?', (record['id'],)).fetchone()
+                if deleted:
+                    record['deleted_at'] = deleted[0]
+            return _same_trial(record, article_id, configuration_id, model, service_tier)
+        # Pin the decision while holding the same writer lock used to reserve
+        # the paid request. A newer review must not silently replace this input.
+        current_review = require_review(db_path, article_id, configuration_id, expected_example=example)
+        if current_review['id'] != applicability['id']:
+            raise ApplicabilityRequiredError('La evaluación cambió durante la preparación; revise la nueva decisión antes de generar.')
         result = connection.execute("""INSERT INTO generation_trials (
             run_key,article_id,source_version_id,configuration_id,configuration_version_id,
             prompt_version_id,destination_id,model,status,request_json,snapshot_json,created_at)

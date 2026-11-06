@@ -21,6 +21,13 @@ from src.deployment.repository import DeploymentRepository
 from src.deployment.wp_publisher import DeploymentDisabledError
 from .deployment_routes import register_deployment_routes
 from src.deployment.management import initialize_management, AdaptationConflict
+from .applicability_routes import register_applicability_routes
+from .image_routes import register_image_routes
+from .adaptation_routes import register_adaptation_routes
+from .model_routes import register_model_routes
+from .execution_routes import register_execution_routes
+from .category_routes import register_category_routes
+from .runtime import panel_instance, install_legacy_guards
 
 
 def _integer(value, name: str, default: int) -> int:
@@ -49,6 +56,7 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
         TRUSTED_HOSTS=['127.0.0.1', 'localhost', '[::1]'],
         GENERATION_ENV_PATH=str(Path(__file__).resolve().parents[2] / '.env'),
         DEPLOYMENT_ENV_PATH=str(Path(__file__).resolve().parents[2] / '.env'),
+        MODEL_CATALOG_CACHE_PATH=str(Path(db_path).resolve().parent / 'model_catalog_cache.json'),
     )
     if test_config:
         app.config.update(test_config)
@@ -83,7 +91,8 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Content-Security-Policy'] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-            "img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+            "img-src 'self' https://pd.w.org https://upload.wikimedia.org https://*.staticflickr.com; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
         )
         return response
 
@@ -148,6 +157,7 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
             page=_integer(request.args.get('page'), 'page', 1),
             page_size=_integer(request.args.get('page_size'), 'page_size', 25),
             sort=request.args.get('sort', 'published_desc'),
+            adaptation=request.args.get('adaptation', 'all'),
         )
         histories = generation.article_summaries([item['id'] for item in data['items']])
         for item in data['items']:
@@ -195,18 +205,26 @@ def create_app(db_path='data/source_articles.db', *, job_manager=None, test_conf
         return jsonify(jobs.submit(payload())), 202
 
     register_generation_routes(app, generation)
+    register_adaptation_routes(app, generation)
+    register_model_routes(app)
+    register_execution_routes(app)
+    register_category_routes(app)
+    register_applicability_routes(app)
     register_deployment_routes(app, deployment)
+    register_image_routes(app)
     return app
 
 
 def run(db_path='data/source_articles.db', *, port=8765, open_browser=False):
     if not 1 <= port <= 65535:
         raise ValueError('El puerto debe estar entre 1 y 65535.')
-    app = create_app(db_path)
-    if open_browser:
-        timer = threading.Timer(1, webbrowser.open, args=(f'http://127.0.0.1:{port}/',))
-        timer.daemon = True
-        timer.start()
-    # One local process: the reloader would duplicate the background-job manager.
-    app.run(host='127.0.0.1', port=port, debug=False, use_reloader=False, threaded=True)
+    with panel_instance(db_path):
+        app = create_app(db_path)
+        install_legacy_guards(db_path)
+        if open_browser:
+            timer = threading.Timer(1, webbrowser.open, args=(f'http://127.0.0.1:{port}/',))
+            timer.daemon = True
+            timer.start()
+        # The reloader would duplicate the background-job manager.
+        app.run(host='127.0.0.1', port=port, debug=False, use_reloader=False, threaded=True)
     return 0

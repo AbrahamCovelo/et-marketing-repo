@@ -47,6 +47,18 @@ def _url(value, base_url, label):
     return value
 
 
+def _clean_ctas(ctas, locale, base_url):
+    if not isinstance(ctas, dict) or set(ctas) != set(CTA_NAMES[locale]):
+        raise ValueError("Los enlaces CTA deben corresponder al idioma del destino.")
+    clean = {}
+    for name, link in ctas.items():
+        if not isinstance(link, dict) or set(link) != {"url", "text"}:
+            raise ValueError("Cada CTA necesita los campos url y text.")
+        clean[name] = {"url": _url(link["url"], base_url, "El enlace CTA"),
+                       "text": _text(link["text"], "El texto CTA", 300)}
+    return clean
+
+
 class DeploymentRepository:
     def __init__(self, db_path, env_path=None):
         self.db_path = db_path
@@ -90,8 +102,20 @@ class DeploymentRepository:
             item["blockers"].append("Falta configurar el usuario o la contraseña de aplicación de WordPress.")
         if not item["guide_url"]:
             item["blockers"].append("Falta definir la ruta del catálogo de guías.")
-        if not item["category_ids"]:
-            item["blockers"].append("Falta confirmar las categorías que incluirá el listado de guías.")
+        # The legacy fixed list is retained for old records, never used as an
+        # automatic classification or as evidence that taxonomy is configured.
+        from .categories import get_category_catalog
+        try:
+            taxonomy = get_category_catalog(self.db_path, item["id"])
+            item["category_policy"] = taxonomy["policy"]
+            item["category_catalog_revision"] = taxonomy["catalog_revision"]
+            item["category_policy_configured"] = taxonomy["configured"]
+            item["blockers"].extend(taxonomy["blockers"])
+        except ValueError as error:
+            item["category_policy"] = None
+            item["category_catalog_revision"] = None
+            item["category_policy_configured"] = False
+            item["blockers"].append(str(error))
         if item["language_mode"] == "pending" or item["connection_key"] == "canadians_fr":
             item["blockers"].append("Pendiente definir y verificar la integración del idioma en WordPress.")
         item["verification_status"] = "not_tested"
@@ -113,6 +137,48 @@ class DeploymentRepository:
                 raise KeyError("No existe el destino WordPress.")
             return self._target(row)
 
+    @staticmethod
+    def _destination_ctas(connection, destination_id):
+        row = connection.execute("""SELECT d.id,d.locale,d.site_url,t.id AS target_id,
+            t.connection_key,t.cta_links_json,t.updated_at
+            FROM generation_destinations d LEFT JOIN deployment_targets t ON t.destination_id=d.id
+            WHERE d.id=?""", (destination_id,)).fetchone()
+        if row is None:
+            raise KeyError("No existe el destino.")
+        locale = LOCALES[row["connection_key"]] if row["connection_key"] else row["locale"]
+        names = CTA_NAMES.get(locale, ())
+        links = json.loads(row["cta_links_json"]) if row["cta_links_json"] else {}
+        blockers = []
+        if row["target_id"] is None:
+            blockers.append("Este destino todavía no tiene una conexión WordPress configurada.")
+        elif (locale != row["locale"] or
+              urlsplit(row["site_url"]).netloc != urlsplit(CONNECTIONS[row["connection_key"]][1]).netloc):
+            blockers.append("El sitio o el idioma del destino no coincide con su conexión WordPress.")
+        return {"destination_id": destination_id, "target_id": row["target_id"], "locale": locale,
+                "base_url": CONNECTIONS[row["connection_key"]][1] if row["connection_key"] else row["site_url"],
+                "cta_links": {name: links.get(name, {"url": "", "text": ""}) for name in names},
+                "editable": not blockers, "blockers": blockers, "updated_at": row["updated_at"]}
+
+    def get_destination_ctas(self, destination_id):
+        _id(destination_id)
+        with Database(self.db_path) as db:
+            return self._destination_ctas(db.connection, destination_id)
+
+    def save_destination_ctas(self, destination_id, payload):
+        """Update only shared CTA settings; routing, credentials and articles stay intact."""
+        _id(destination_id)
+        if not isinstance(payload, dict) or set(payload) != {"cta_links"}:
+            raise ValueError("Se requiere únicamente cta_links.")
+        with Database(self.db_path) as db, db.connection:
+            db.connection.execute("BEGIN IMMEDIATE")
+            item = self._destination_ctas(db.connection, destination_id)
+            if not item["editable"]:
+                raise ValueError(" ".join(item["blockers"]))
+            links = _clean_ctas(payload["cta_links"], item["locale"], item["base_url"])
+            db.connection.execute("UPDATE deployment_targets SET cta_links_json=?,updated_at=? WHERE id=?",
+                                  (json.dumps(links, ensure_ascii=False), _now(), item["target_id"]))
+            return self._destination_ctas(db.connection, destination_id)
+
     def save_target(self, target_id, payload):
         if not isinstance(payload, dict) or set(payload) != {"guide_url", "category_ids", "language_mode", "cta_links", "notes"}:
             raise ValueError("Se requieren ruta, categorías, modo de idioma, enlaces CTA y notas.")
@@ -127,14 +193,7 @@ class DeploymentRepository:
             raise ValueError("El modo de idioma no es válido.")
         if target["connection_key"] == "canadians_fr" and language != "pending":
             raise ValueError("La integración del francés sigue pendiente; no puede enviarse como idioma predeterminado.")
-        ctas = payload["cta_links"]
-        if not isinstance(ctas, dict) or set(ctas) != set(CTA_NAMES[target["locale"]]):
-            raise ValueError("Los enlaces CTA deben corresponder al idioma del destino.")
-        clean_ctas = {}
-        for name, link in ctas.items():
-            if not isinstance(link, dict) or set(link) != {"url", "text"}:
-                raise ValueError("Cada CTA necesita los campos url y text.")
-            clean_ctas[name] = {"url": _url(link["url"], target["base_url"], "El enlace CTA"), "text": _text(link["text"], "El texto CTA", 300)}
+        clean_ctas = _clean_ctas(payload["cta_links"], target["locale"], target["base_url"])
         notes = _text(payload["notes"], "Las notas")
         with Database(self.db_path) as db, db.connection:
             db.connection.execute("""UPDATE deployment_targets SET guide_url=?,category_ids_json=?,language_mode=?,

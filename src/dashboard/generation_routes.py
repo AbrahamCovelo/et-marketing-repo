@@ -1,10 +1,11 @@
-"""Preparation-only generation routes. No route dispatches work to an AI service."""
+"""Local configuration/preparation routes; explicit jobs live in execution_routes."""
 from flask import Blueprint, current_app, jsonify, request
 
 from src.generation.preparation import PLACEHOLDERS, execute_generation, preview_preparation
 from src.generation.settings import public_status
 from src.generation.model_options import MODEL_REFERENCE
 from src.deployment.management import delete_adaptation, preview_redeployment, redeploy_adaptation
+from src.deployment.repository import DeploymentRepository
 
 
 def register_generation_routes(app, repository):
@@ -32,6 +33,7 @@ def register_generation_routes(app, repository):
             **public_status(env_path=current_app.config['GENERATION_ENV_PATH']),
             placeholders=PLACEHOLDERS,
             model_reference=MODEL_REFERENCE,
+            automatic_execution_enabled=True,
         )
 
     @routes.post('/api/generation/destinations')
@@ -41,6 +43,16 @@ def register_generation_routes(app, repository):
     @routes.put('/api/generation/destinations/<int:destination_id>')
     def update_destination(destination_id):
         return jsonify(repository.save_destination(payload(), destination_id=destination_id))
+
+    @routes.get('/api/generation/destinations/<int:destination_id>/ctas')
+    def destination_ctas(destination_id):
+        deployment = DeploymentRepository(current_app.config['DATABASE_PATH'], current_app.config['DEPLOYMENT_ENV_PATH'])
+        return jsonify(deployment.get_destination_ctas(destination_id))
+
+    @routes.put('/api/generation/destinations/<int:destination_id>/ctas')
+    def update_destination_ctas(destination_id):
+        deployment = DeploymentRepository(current_app.config['DATABASE_PATH'], current_app.config['DEPLOYMENT_ENV_PATH'])
+        return jsonify(deployment.save_destination_ctas(destination_id, payload()))
 
     @routes.post('/api/generation/prompts')
     def create_prompt():

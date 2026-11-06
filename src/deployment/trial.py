@@ -14,9 +14,12 @@ from urllib.parse import urlsplit
 import requests
 
 from src.generation.trial import get_trial
+from src.generation.content_edits import effective_content
 from .content import prepare_wordpress_content, validate_semantic_html
 from .repository import CTA_NAMES, DeploymentRepository, _id, _text
 from .settings import load_credentials
+from .categories import validate_category_selection
+from .trial_categories import assert_category_state, trial_category_selection
 
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS deployment_trials (
@@ -166,6 +169,16 @@ def send_trial_draft(db_path, trial_id, *, title, featured_media, category_ids,
             raise ValueError("WordPress devolvió una comprobación ilegible; no se envió el borrador.") from None
 
     try:
+        selection = trial_category_selection(db_path, trial_id, target["id"])
+        if selection["source"] == "manual" or (not category_ids and selection["category_ids"]):
+            category_ids = selection["category_ids"]
+            category_snapshot = selection["context"]
+        else:
+            category_snapshot = selection["context"] if category_ids == selection["category_ids"] else None
+        category_check = validate_category_selection(db_path, target["id"], category_ids,
+            context=category_snapshot, env_path=env_path, session=client, refresh=True)
+        category_ids = category_check["category_ids"]
+        payload["categories"] = category_ids
         user = checked_get("users/me", {"context": "edit"})
         if (not isinstance(user, dict) or type(user.get("id")) is not int or user["id"] <= 0
                 or not isinstance(user.get("capabilities"), dict) or user["capabilities"].get("edit_posts") is not True):
@@ -175,11 +188,6 @@ def send_trial_draft(db_path, trial_id, *, title, featured_media, category_ids,
                 or not isinstance(media.get("mime_type"), str) or not media["mime_type"].startswith("image/")
                 or not _same_origin(media.get("source_url"), base)):
             raise ValueError("WordPress no confirmó una imagen válida de este sitio.")
-        if category_ids:
-            categories = checked_get("categories", {"include": ",".join(map(str, category_ids)), "per_page": 100})
-            if (not isinstance(categories, list) or any(not isinstance(c, dict) or type(c.get("id")) is not int for c in categories)
-                    or {c["id"] for c in categories} != set(category_ids)):
-                raise ValueError("WordPress no confirmó todas las categorías solicitadas.")
         with closing(sqlite3.connect(db_path, timeout=30)) as connection, connection:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
@@ -188,6 +196,12 @@ def send_trial_draft(db_path, trial_id, *, title, featured_media, category_ids,
             existing = connection.execute("SELECT * FROM deployment_trials WHERE generation_trial_id=?", (trial_id,)).fetchone()
             if existing:
                 return _record(existing)
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone() and connection.execute('SELECT 1 FROM adaptation_deletions WHERE trial_id=?', (trial_id,)).fetchone():
+                raise ValueError("La adaptación fue eliminada durante la comprobación. No se envió contenido.")
+            original = connection.execute('SELECT html FROM generation_trials WHERE id=?', (trial_id,)).fetchone()
+            if not original or effective_content(connection, trial_id, original[0])['content_revision'] != trial['content_revision']:
+                raise ValueError("La adaptación cambió durante la comprobación. Revise el contenido antes de enviarlo.")
+            assert_category_state(connection, trial, target["id"], selection["revision"], category_check["policy_revision"])
             now = _now()
             connection.execute("""INSERT INTO deployment_trials
                 (generation_trial_id,target_id,status,payload_json,warnings_json,created_at,updated_at)
@@ -212,12 +226,16 @@ def send_trial_draft(db_path, trial_id, *, title, featured_media, category_ids,
                 result["post_status"] = data["status"]
             if type(data.get("featured_media")) is int:
                 result["featured_media"] = data["featured_media"]
+            if (isinstance(data.get("categories"), list)
+                    and all(type(value) is int for value in data["categories"])):
+                result["categories"] = sorted(set(data["categories"]))
             link = data.get("link")
             if _same_origin(link, base) and not any(secret and secret in link for secret in secrets):
                 result["link"] = link
-        if not result or result.get("post_status") != "draft" or result.get("featured_media") != featured_media:
+        if (not result or result.get("post_status") != "draft" or result.get("featured_media") != featured_media
+                or result.get("categories") != category_ids):
             return _finish(db_path, trial_id, "unknown", result=result,
-                           error="WordPress no confirmó un borrador con la imagen solicitada; requiere comprobación manual, sin reintento.")
+                           error="WordPress no confirmó un borrador con la imagen y categorías solicitadas; requiere comprobación manual, sin reintento.")
         return _finish(db_path, trial_id, "draft", result=result)
     finally:
         if session is None:

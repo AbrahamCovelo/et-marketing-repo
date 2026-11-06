@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 from src.extraction.db_manager import Database
 from .preparation import PLACEHOLDERS, render_template
 from .model_options import generation_options, validate_model_override
+from .content_edits import effective_content
+from .usage import trial_usage_summaries
 
 
 _MAX_ID = 2**63 - 1
@@ -511,15 +513,13 @@ class GenerationRepository:
                 active = [row["id"] for row in plans if row["status"] == "prepared"]
                 item["plan_id"] = (active or item["plan_ids"])[-1]
             trials = self._trial_rows(db.connection, [article_id])
-            completed = sum(item["status"] == "completed" and not item.get("deleted_at") for item in trials)
-            deleted_count = sum(bool(item.get("deleted_at")) for item in trials)
+            completed = sum(item["status"] == "completed" for item in trials)
             return {"article_id": article_id, "generated_count": completed,
                     "prepared_count": sum(item["status"] == "prepared" for item in items),
                     "adaptation_status": "adapted" if completed else "not_adapted",
-                    "items": items, "trials": trials, "deleted_count": deleted_count,
+                    "items": items, "trials": trials,
                     "message": (f"{completed} adaptación(es) generada(s), pendientes de revisión editorial."
-                                if completed else "No hay adaptaciones activas; se conserva el registro de las eliminadas."
-                                if deleted_count else "Todavía no hubo adaptaciones.")}
+                                if completed else "Todavía no hubo adaptaciones.")}
 
     @staticmethod
     def _trial_rows(connection, article_ids: list[int], *, trial_id=None, include_html=False) -> list[dict]:
@@ -529,8 +529,10 @@ class GenerationRepository:
         if trial_id is None and not article_ids:
             return []
         condition = "t.id=?" if trial_id is not None else f"t.article_id IN ({','.join('?' for _ in article_ids)})"
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone():
+            condition += " AND NOT EXISTS (SELECT 1 FROM adaptation_deletions deleted WHERE deleted.trial_id=t.id)"
         parameters = [trial_id] if trial_id is not None else article_ids
-        fields = ",t.html" if include_html else ""
+        fields = ",t.html"
         rows = connection.execute(f"""SELECT t.id,t.article_id,t.source_version_id,t.configuration_id,
             t.configuration_version_id,t.prompt_version_id,t.destination_id,t.model,t.status,
             t.created_at,t.completed_at,t.usage_json,c.name AS configuration_name,
@@ -548,16 +550,13 @@ class GenerationRepository:
             item["review_status"] = "pending" if item["status"] == "completed" else "not_ready"
             result.append(item)
         deployments = GenerationRepository._deployment_rows(connection, [item["id"] for item in result])
-        deleted = {}
-        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptation_deletions'").fetchone():
-            deleted = dict(connection.execute('SELECT trial_id,deleted_at FROM adaptation_deletions'))
+        consumption = trial_usage_summaries(connection, [item['id'] for item in result])
         for item in result:
+            item['usage_summary'] = consumption[item['id']]
             item["deployment"] = deployments.get(item["id"])
-            item["deleted_at"] = deleted.get(item["id"])
-            if item["deleted_at"]:
-                item["review_status"] = "deleted"
-                if include_html:
-                    item["html"] = ""
+            item.update(effective_content(connection, item['id'], item['html']))
+            if not include_html:
+                item.pop('html', None)
         return result
 
     @staticmethod

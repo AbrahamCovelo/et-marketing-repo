@@ -6,9 +6,15 @@
   <meta name="panel-token" content="{{ panel_token }}">
   <title>ET · Panel de contenido</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='applicability.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='images.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   <script src="{{ url_for('static', filename='generation.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='execution.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='categories.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='applicability.js') }}" defer></script>
   <script src="{{ url_for('static', filename='deployment.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='images.js') }}" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#workspace">Ir al contenido</a>
@@ -54,11 +60,12 @@
           <button id="reset-filters" type="button">Limpiar filtros</button>
         </div>
         <div class="filter-row">
-          <label>Fecha a consultar<select id="date-field"><option value="published_at">Publicación original</option><option value="modified_at">Modificación original</option><option value="captured_at">Extracción de versión</option></select></label>
+          <label>Fecha a consultar<select id="date-field"><option value="published_at">Publicación original</option><option value="modified_at">Modificación original</option><option value="captured_at">Extracción de versión</option><option value="last_adapted_at">Última adaptación · Bogotá</option></select></label>
           <label>Desde<input id="date-from" type="date"></label>
           <label>Hasta<input id="date-to" type="date"></label>
           <label>Revisión<select id="review-filter"><option value="all">Todos los artículos</option><option value="needs_review">Con avisos de revisión</option><option value="clean">Sin avisos de revisión</option></select></label>
-          <label>Ordenar<select id="sort-order"><option value="published_desc">Publicación más reciente</option><option value="modified_desc">Modificación más reciente</option><option value="captured_desc">Versión más reciente</option><option value="title_asc">Título A–Z</option></select></label>
+          <label>Ordenar<select id="sort-order"><option value="published_desc">Publicación más reciente</option><option value="modified_desc">Modificación más reciente</option><option value="captured_desc">Versión más reciente</option><option value="adapted_desc">Adaptación más reciente</option><option value="title_asc">Título A–Z</option></select></label>
+          <label>Adaptaciones<select id="adaptation-filter"><option value="all">Todos</option><option value="adapted">Con adaptaciones</option><option value="not_adapted">Sin adaptaciones</option></select></label>
           <label class="check-label"><input id="selected-only" type="checkbox">Solo seleccionados</label>
         </div>
         <p id="date-help" class="muted hint">Los extremos del rango se incluyen. Las fechas de publicación y modificación corresponden al sitio original.</p>
@@ -155,12 +162,73 @@
     </section>
     <section id="generation-panel" role="tabpanel" aria-labelledby="tab-generation" hidden>
       <section class="card preparation-banner">
-        <div class="section-title"><h2>Preparar la adaptación de artículos</h2><span class="badge">Modo preparación · Sin llamadas a API</span></div>
+        <div class="section-title"><h2>Preparar la adaptación de artículos</h2><span class="badge">Preparación y pruebas</span></div>
         <p>Defina destinos, guarde versiones de los prompts y combine ambos en configuraciones. Después seleccione artículos en Revisión de datos y pulse «Adaptar seleccionados».</p>
         <p class="muted">Revise las plantillas y el modelo antes de iniciar las pruebas. Guardar una preparación conserva las versiones elegidas; todavía no crea un artículo adaptado.</p>
         <p id="generation-credentials" class="muted hint" role="status">Consultando configuración local…</p>
-        <button type="button" disabled aria-describedby="generation-disabled-help">Generar adaptaciones</button>
-        <p id="generation-disabled-help" class="muted hint">Generación deshabilitada en esta fase. Ninguna acción de esta sección envía contenido a una API.</p>
+        <button id="generation-open-selection" type="button">Adaptar artículos seleccionados</button>
+        <p id="generation-disabled-help" class="muted hint">Guardar configuraciones o consultar modelos no genera contenido. Al pulsar «Generar con API», la API evalúa la aplicabilidad y redacta solo si el tema corresponde al destino.</p>
+      </section>
+      <section class="card">
+        <div class="section-title"><h2>Generaciones desde el panel</h2><button id="generation-refresh-runs" type="button">Actualizar</button></div>
+        <div id="generation-run-list" class="history-list" aria-live="polite"><p class="muted">Las pruebas iniciadas desde el panel aparecerán aquí.</p></div>
+      </section>
+      <section class="card">
+        <h2>Consumo registrado de OpenAI</h2>
+        <p>Una adaptación automática utiliza una llamada de evaluación con búsqueda web y otra de redacción. Si el tema no aplica, se omite la redacción. Las consultas de modelos y categorías no generan contenido.</p>
+        <div id="generation-usage" aria-live="polite"></div>
+      </section>
+      <section id="applicability-panel" class="card" aria-labelledby="applicability-title">
+        <div class="section-title"><h2 id="applicability-title">Aplicabilidad antes de redactar</h2><span class="badge">Revisión editorial local</span></div>
+        <p>Al generar, la API evalúa si el tema sirve al público, consulta fuentes y determina qué excluir. Este formulario permite conservar una revisión manual adicional; no es un paso obligatorio para la generación automática.</p>
+        <form id="applicability-lookup-form">
+          <fieldset id="applicability-lookup-controls">
+            <div class="applicability-grid applicability-selection">
+              <label>ID del artículo original<input id="applicability-article" type="number" min="1" step="1" required placeholder="ID del artículo"></label>
+              <label>Configuración y público<select id="applicability-configuration" required><option value="">Seleccione una configuración</option></select></label>
+            </div>
+            <div class="actions"><button id="applicability-consult" type="submit">Consultar revisión</button><button id="applicability-use-current" type="button">Usar artículo abierto o seleccionado</button></div>
+            <p class="muted hint">Puede abrir un artículo en Revisión de datos o seleccionar uno de la lista y volver a esta sección.</p>
+          </fieldset>
+        </form>
+        <div id="applicability-error" class="notice error" role="alert" hidden></div>
+        <div id="applicability-notice" class="notice success" role="status" hidden></div>
+        <div id="applicability-context" aria-live="polite" hidden>
+          <p id="applicability-article-title"></p>
+          <p id="applicability-status" class="applicability-status"></p>
+          <p id="applicability-latest" class="muted hint" hidden></p>
+        </div>
+        <form id="applicability-review-form" hidden>
+          <fieldset id="applicability-review-controls" class="applicability-stack">
+            <p class="muted hint">Guardar registra su decisión y conserva el historial. Las fuentes que añada no se verifican automáticamente. Esta acción no genera artículos ni llama a una API.</p>
+            <div class="applicability-grid">
+              <label>Decisión<select id="applicability-decision" required><option value="needs_verification">Pendiente de verificación</option><option value="adapt">Adaptar</option><option value="omit">Omitir todo el artículo</option></select></label>
+              <label>Revisor<input id="applicability-reviewer" required maxlength="200" value="Revisión editorial"></label>
+            </div>
+            <label>¿Qué pregunta central resuelve el artículo?<textarea id="applicability-question" required maxlength="1500" rows="2"></textarea></label>
+            <label>Motivo de la decisión para este público<textarea id="applicability-reason" required maxlength="4000" rows="3"></textarea></label>
+            <div class="applicability-grid">
+              <label>¿La pregunta central es útil para este público?<select id="applicability-central"><option value="">Sin comprobar</option><option value="yes">Sí</option><option value="no">No</option></select></label>
+              <label>¿Todo el artículo depende de una exclusividad ajena a este público?<select id="applicability-exclusive"><option value="">Sin comprobar</option><option value="yes">Sí</option><option value="no">No</option></select></label>
+              <label>Si depende de esa exclusividad, ¿hay una alternativa aplicable?<select id="applicability-alternative"><option value="">Sin comprobar / no corresponde</option><option value="yes">Sí</option><option value="no">No</option></select></label>
+              <label class="check-label"><input id="applicability-verified" type="checkbox">He comprobado la información esencial para esta decisión</label>
+            </div>
+            <p class="muted hint applicability-help">Para omitir la guía completa, confirme que su núcleo es exclusivo y no existe una alternativa aplicable, e indique las fuentes consultadas. La falta de datos corresponde a «Pendiente de verificación».</p>
+            <div>
+              <h3>Apartados a excluir</h3>
+              <p class="muted hint">Identifique cada apartado que no corresponde al público y explique por qué.</p>
+              <div id="applicability-exclusions"></div>
+              <div class="actions"><button id="applicability-add-exclusion" type="button">Añadir apartado</button></div>
+            </div>
+            <div>
+              <h3>Fuentes comprobadas por el revisor</h3>
+              <p class="muted hint">Registre la URL oficial, la fecha de consulta y qué comprobó. Añadir un enlace por sí solo no demuestra que la información sea correcta.</p>
+              <div id="applicability-evidence"></div>
+              <div class="actions"><button id="applicability-add-evidence" type="button">Añadir fuente</button></div>
+            </div>
+            <div class="actions"><button id="applicability-save" type="submit" class="primary">Guardar revisión local</button></div>
+          </fieldset>
+        </form>
       </section>
       <nav class="tabs generation-tabs" role="tablist" aria-label="Gestión de adaptaciones">
         <button id="generation-tab-configurations" type="button" role="tab" aria-selected="true" aria-controls="generation-configurations" data-generation-tab="configurations">Configuraciones</button>
@@ -237,6 +305,16 @@
             <div class="actions"><button type="submit" class="primary">Guardar destino</button><button id="destination-new" type="button">Crear otro destino</button></div>
           </fieldset>
         </form>
+        <h3>Enlaces CTA del destino</h3>
+        <p class="muted hint">Todas las configuraciones de este destino comparten estos enlaces. Puede dejar la URL y el texto vacíos hasta que existan las páginas. Al preparar el envío a WordPress, Python reemplaza los marcadores configurados por enlaces; los pendientes siguen señalados para revisión.</p>
+        <form id="destination-cta-form">
+          <fieldset id="destination-cta-controls" disabled>
+            <div id="destination-cta-fields"></div>
+            <button type="submit">Guardar enlaces CTA</button>
+          </fieldset>
+        </form>
+        <p id="destination-cta-status" class="muted hint" role="status">Seleccione un destino guardado.</p>
+        <p id="destination-cta-error" class="notice error" role="alert" hidden></p>
       </section>
 
       <section id="generation-plans" role="tabpanel" aria-labelledby="generation-tab-plans" class="card" hidden>
@@ -248,8 +326,8 @@
     <section id="deployment-panel" role="tabpanel" aria-labelledby="tab-deployment" hidden>
       <section class="card preparation-banner">
         <div class="section-title"><h2>Preparar el envío a WordPress</h2><span class="badge">Solo configuración local</span></div>
-        <p>Guarde las rutas temporales, las categorías y los enlaces de cada destino. Después podrá revisar la estructura de un futuro borrador antes de conectar el envío.</p>
-        <p class="muted">Esta sección no crea artículos, no sube imágenes y no consulta las credenciales contra WordPress. El envío permanece deshabilitado.</p>
+        <p>Guarde las rutas temporales, las categorías y los enlaces de cada destino. Revise aquí la estructura de un futuro borrador.</p>
+        <p class="muted">Para generar y enviar un borrador con portada automática, seleccione artículos y use «Adaptar seleccionados». El buscador de esta sección también permite importar fotografías por separado.</p>
       </section>
       <div id="deployment-error" class="notice error" role="alert" hidden></div>
       <div id="deployment-notice" class="notice success" role="status" hidden></div>
@@ -268,7 +346,7 @@
             <label>URL de la sección de guías (opcional)<input id="deployment-guide-url" type="url" maxlength="2000" placeholder="https://…" autocomplete="off"></label>
             <p class="muted hint">Puede cambiar esta ruta mientras se termina el sitio. Guardar una URL no crea una página ni hace que los artículos aparezcan allí automáticamente.</p>
             <div class="form-grid">
-              <label>Categorías de WordPress (IDs, separados por comas)<input id="deployment-categories" maxlength="1000" inputmode="numeric" placeholder="Por definir; por ejemplo: 12, 34" autocomplete="off"></label>
+              <input id="deployment-categories" type="hidden">
               <label>Configuración del idioma<select id="deployment-language-mode"><option value="site_default">Usar el idioma principal del sitio</option><option value="pending">Pendiente de configurar</option></select></label>
             </div>
             <p id="deployment-language-help" class="muted hint"></p>
@@ -279,10 +357,14 @@
             <div class="actions"><button type="submit" class="primary">Guardar configuración de WordPress</button><span id="deployment-dirty" class="muted hint" hidden>Hay cambios sin guardar.</span></div>
           </fieldset>
         </form>
+        <h3>Categorías para la clasificación automática</h3>
+        <p>Consulte las categorías del sitio y habilite las que correspondan. La API elegirá las pertinentes para cada artículo durante la evaluación; no añade una llamada de generación.</p>
+        <button id="category-refresh" type="button">Consultar categorías de WordPress</button>
+        <div id="category-policy" aria-live="polite"></div>
       </section>
       <section class="card deployment-image-note">
         <h2>Imagen destacada y apariencia del artículo</h2>
-        <p>La imagen de portada debe existir en la biblioteca de medios de WordPress o subirse más adelante. Se asignará a cada artículo mediante su ID de imagen destacada. WordPress puede crear tamaños derivados del archivo, pero no crea la fotografía original.</p>
+        <p>Puede importar una fotografía CC0 con el buscador o utilizar una imagen existente en los medios de WordPress. Su ID identifica la portada al preparar el artículo. WordPress puede crear tamaños derivados del archivo, pero no crea la fotografía original.</p>
         <p>La misma imagen destacada puede aparecer en la tarjeta y al abrir el artículo, siempre que ambas plantillas estén configuradas para mostrarla. Los colores, las fuentes, los espacios y el tamaño de la imagen los controla el tema.</p>
         <p class="muted">El cuerpo utilizará HTML semántico, sin estilos propios ni imágenes incrustadas de portada. El título y la imagen destacada se guardan por separado. Cambiar de tema podrá cambiar su aspecto; habrá que comprobar que el nuevo tema muestre estos elementos.</p>
       </section>
@@ -312,22 +394,33 @@
     </section>
   </main>
   <dialog id="adapt-dialog" aria-labelledby="adapt-dialog-title" aria-describedby="adapt-dialog-description">
-    <div class="section-title"><h2 id="adapt-dialog-title">Adaptar artículos · Preparación</h2><button id="close-adapt-dialog" type="button" aria-label="Cerrar preparación">Cerrar</button></div>
-    <p id="adapt-dialog-description">Elija una o varias configuraciones. Solo se preparará el trabajo: hoy no se generará contenido ni se gastará saldo de API.</p>
+    <div class="section-title"><h2 id="adapt-dialog-title">Adaptar artículos</h2><button id="close-adapt-dialog" type="button" aria-label="Cerrar preparación">Cerrar</button></div>
+    <p id="adapt-dialog-description">Elija configuraciones y un modelo. Preparar es una acción local; «Generar con API» consume saldo para evaluar la aplicabilidad, consultar fuentes y redactar.</p>
     <p id="adapt-article-count" class="muted"></p>
     <div id="adapt-error" class="notice error" role="alert" hidden></div>
     <div id="adapt-notice" class="notice success" role="status" hidden></div>
     <fieldset class="configuration-choices"><legend>Configuraciones disponibles</legend><div id="adapt-configurations"></div></fieldset>
     <fieldset id="adapt-model-controls">
-      <legend>Modelo para esta preparación</legend>
+      <legend>Modelo para esta adaptación</legend>
       <label>Modelo GPT<select id="adapt-model"><option value="">Usar el modelo de cada configuración</option></select></label>
       <label id="adapt-custom-model-wrap" hidden>Identificador del modelo<input id="adapt-custom-model" maxlength="200" placeholder="gpt-…" autocomplete="off" spellcheck="false"></label>
       <p class="muted hint">El modelo elegido aquí se conserva en el lote y no modifica las configuraciones. Solo se aplica a configuraciones OpenAI. Puede dejar el modelo pendiente.</p>
       <p id="adapt-model-reference" class="muted hint"></p>
+      <button id="adapt-refresh-models" type="button">Actualizar modelos · sin generar</button>
+      <label>Esfuerzo de razonamiento para generar<select id="adapt-effort"><option value="">Predeterminado del modelo</option></select></label>
+      <p id="adapt-effort-help" class="muted hint"></p>
+      <label>Nivel de servicio<select id="adapt-service-tier"><option value="default">Estándar</option><option value="flex">Flex · menor precio, sujeto a disponibilidad</option></select></label>
     </fieldset>
+    <label class="check-label"><input id="adapt-send-draft" type="checkbox">Crear también un borrador en WordPress con imagen seleccionada automáticamente</label>
+    <p class="muted hint">Sin esta opción se guarda solo la adaptación local. Con ella se importa la portada y se crea un borrador, nunca una publicación. Los CTA sin enlace quedan pendientes en ese borrador. El envío en francés requiere configurar antes el idioma en WordPress.</p>
     <p id="adapt-pair-count" role="status" aria-live="polite"></p>
     <p class="muted hint">Máximo 500 combinaciones por preparación. Al guardar se fijan las versiones vigentes en ese momento. Si cambió un artículo o una configuración en otra pestaña, vuelva a previsualizar antes de guardar. Los borradores pueden guardarse para revisión; conservar una preparación no la convierte en adaptación.</p>
-    <div class="actions"><button id="preview-preparation" type="button">Previsualizar preparación</button><button id="save-preparation" type="button" class="primary">Guardar preparación</button><button type="button" disabled>Generar · Deshabilitado</button></div>
+    <button id="preview-generation-cost" type="button">Calcular coste estimado · sin generar</button>
+    <div id="generation-cost-preview" aria-live="polite"></div>
+    <label class="check-label"><input id="accept-generation-cost" type="checkbox" disabled>He revisado el coste estimado y las dos etapas facturables.</label>
+    <div class="actions"><button id="preview-preparation" type="button">Previsualizar preparación</button><button id="save-preparation" type="button">Guardar preparación</button><button id="start-generation" type="button" class="primary" disabled>Generar con API</button></div>
+    <p id="generation-start-help" class="muted hint"></p>
+    <div id="adapt-generation-progress" role="status" aria-live="polite"></div>
     <section id="preparation-preview" class="preparation-preview" aria-label="Vista previa local" hidden>
       <h3>Vista previa local</h3><p id="preview-summary" class="muted"></p>
       <div id="preview-warnings" class="preparation-warnings"></div>
